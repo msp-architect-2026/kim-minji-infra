@@ -1,156 +1,104 @@
-apiVersion: v1
-items:
-- apiVersion: networking.k8s.io/v1
-  kind: NetworkPolicy
-  metadata:
-    annotations:
-      kubectl.kubernetes.io/last-applied-configuration: |
-        {"apiVersion":"networking.k8s.io/v1","kind":"NetworkPolicy","metadata":{"annotations":{},"name":"allow-dns-egress","namespace":"application"},"spec":{"egress":[{"ports":[{"port":53,"protocol":"UDP"},{"port":53,"protocol":"TCP"}],"to":[{"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"kube-system"}},"podSelector":{"matchLabels":{"k8s-app":"kube-dns"}}}]}],"podSelector":{},"policyTypes":["Egress"]}}
-    creationTimestamp: "2026-03-02T11:44:06Z"
-    generation: 1
-    name: allow-dns-egress
-    namespace: application
-    resourceVersion: "49628"
-    uid: f4c36bd4-994d-44fe-a68f-663b517f8d19
-  spec:
-    egress:
-    - ports:
-      - port: 53
-        protocol: UDP
-      - port: 53
-        protocol: TCP
-      to:
-      - namespaceSelector:
-          matchLabels:
-            kubernetes.io/metadata.name: kube-system
-        podSelector:
-          matchLabels:
-            k8s-app: kube-dns
-    podSelector: {}
-    policyTypes:
-    - Egress
-- apiVersion: networking.k8s.io/v1
-  kind: NetworkPolicy
-  metadata:
-    annotations:
-      kubectl.kubernetes.io/last-applied-configuration: |
-        {"apiVersion":"networking.k8s.io/v1","kind":"NetworkPolicy","metadata":{"annotations":{},"name":"allow-egress-to-minio","namespace":"application"},"spec":{"egress":[{"ports":[{"port":9000,"protocol":"TCP"}],"to":[{"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"storage"}},"podSelector":{"matchLabels":{"app":"minio"}}}]}],"podSelector":{"matchExpressions":[{"key":"app.kubernetes.io/name","operator":"In","values":["backend"]}]},"policyTypes":["Egress"]}}
-    creationTimestamp: "2026-03-02T11:58:49Z"
-    generation: 2
-    name: allow-egress-to-minio
-    namespace: application
-    resourceVersion: "169651"
-    uid: 4c0c72d4-e2bc-49f1-a69f-f9f30ba2a397
-  spec:
-    egress:
-    - ports:
-      - port: 9000
-        protocol: TCP
-      to:
-      - namespaceSelector:
-          matchLabels:
-            kubernetes.io/metadata.name: storage
-        podSelector:
-          matchLabels:
-            app: minio
-    podSelector:
-      matchExpressions:
-      - key: app.kubernetes.io/name
-        operator: In
-        values:
-        - backend
-    policyTypes:
-    - Egress
-- apiVersion: networking.k8s.io/v1
-  kind: NetworkPolicy
-  metadata:
-    annotations:
-      kubectl.kubernetes.io/last-applied-configuration: |
-        {"apiVersion":"networking.k8s.io/v1","kind":"NetworkPolicy","metadata":{"annotations":{},"name":"allow-egress-to-mysql","namespace":"application"},"spec":{"egress":[{"ports":[{"port":3306,"protocol":"TCP"}],"to":[{"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"storage"}},"podSelector":{"matchLabels":{"app":"mysql"}}}]}],"podSelector":{"matchExpressions":[{"key":"app.kubernetes.io/name","operator":"In","values":["backend"]}]},"policyTypes":["Egress"]}}
-    creationTimestamp: "2026-03-02T11:54:48Z"
-    generation: 2
-    name: allow-egress-to-mysql
-    namespace: application
-    resourceVersion: "169645"
-    uid: e41ab050-93d3-43df-b5a8-aaaa2dd8e819
-  spec:
-    egress:
-    - ports:
-      - port: 3306
-        protocol: TCP
-      to:
-      - namespaceSelector:
-          matchLabels:
-            kubernetes.io/metadata.name: storage
-        podSelector:
-          matchLabels:
-            app: mysql
-    podSelector:
-      matchExpressions:
-      - key: app.kubernetes.io/name
-        operator: In
-        values:
-        - backend
-    policyTypes:
-    - Egress
-- apiVersion: networking.k8s.io/v1
-  kind: NetworkPolicy
-  metadata:
-    annotations:
-      kubectl.kubernetes.io/last-applied-configuration: |
-        {"apiVersion":"networking.k8s.io/v1","kind":"NetworkPolicy","metadata":{"annotations":{},"name":"allow-ingress-nginx-to-echo","namespace":"application"},"spec":{"ingress":[{"from":[{"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"ingress-nginx"}}}],"ports":[{"port":80,"protocol":"TCP"}]}],"podSelector":{"matchLabels":{"app":"echo"}},"policyTypes":["Ingress"]}}
-    creationTimestamp: "2026-03-02T11:51:50Z"
-    generation: 1
-    name: allow-ingress-nginx-to-echo
-    namespace: application
-    resourceVersion: "50251"
-    uid: 4bbde000-d611-45b0-8c13-12bf44fd985a
-  spec:
-    ingress:
-    - from:
-      - namespaceSelector:
-          matchLabels:
-            kubernetes.io/metadata.name: ingress-nginx
-      ports:
-      - port: 80
-        protocol: TCP
-    podSelector:
-      matchLabels:
-        app: echo
-    policyTypes:
-    - Ingress
-- apiVersion: networking.k8s.io/v1
-  kind: NetworkPolicy
-  metadata:
-    annotations:
-      kubectl.kubernetes.io/last-applied-configuration: |
-        {"apiVersion":"networking.k8s.io/v1","kind":"NetworkPolicy","metadata":{"annotations":{},"name":"default-deny-egress","namespace":"application"},"spec":{"podSelector":{},"policyTypes":["Egress"]}}
-    creationTimestamp: "2026-03-02T11:40:51Z"
-    generation: 1
-    name: default-deny-egress
-    namespace: application
-    resourceVersion: "49416"
-    uid: e5b6bba6-9308-49e9-9ad8-2f277542b4ae
-  spec:
-    podSelector: {}
-    policyTypes:
-    - Egress
-- apiVersion: networking.k8s.io/v1
-  kind: NetworkPolicy
-  metadata:
-    annotations:
-      kubectl.kubernetes.io/last-applied-configuration: |
-        {"apiVersion":"networking.k8s.io/v1","kind":"NetworkPolicy","metadata":{"annotations":{},"name":"default-deny-ingress","namespace":"application"},"spec":{"podSelector":{},"policyTypes":["Ingress"]}}
-    creationTimestamp: "2026-03-02T11:40:51Z"
-    generation: 1
-    name: default-deny-ingress
-    namespace: application
-    resourceVersion: "49415"
-    uid: 6f7922bb-db12-4f0b-9129-1a0115cb75b8
-  spec:
-    podSelector: {}
-    policyTypes:
-    - Ingress
-kind: List
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
 metadata:
-  resourceVersion: ""
+  name: default-deny-egress
+  namespace: application
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: application
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-egress
+  namespace: application
+spec:
+  podSelector: {}
+  egress:
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+  policyTypes:
+    - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-to-mysql
+  namespace: application
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values:
+          - backend
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: storage
+          podSelector:
+            matchLabels:
+              app: mysql
+      ports:
+        - protocol: TCP
+          port: 3306
+  policyTypes:
+    - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-to-minio
+  namespace: application
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values:
+          - backend
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: storage
+          podSelector:
+            matchLabels:
+              app: minio
+      ports:
+        - protocol: TCP
+          port: 9000
+  policyTypes:
+    - Egress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-nginx-to-echo
+  namespace: application
+spec:
+  podSelector:
+    matchLabels:
+      app: echo
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+  policyTypes:
+    - Ingress
