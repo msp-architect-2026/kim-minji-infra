@@ -1,0 +1,16 @@
+ingress:
+  app:
+    host: app.wafer.local
+    serviceName: frontend-frontend
+    servicePort: 80
+    serviceNamespace: application
+  api:
+    host: api.wafer.local
+    serviceName: backend-backend
+    servicePort: 8080
+    serviceNamespace: application
+  ai:
+    host: ai.wafer.local
+    serviceName: ai-serving-ai-serving
+    servicePort: 8000
+    serviceNamespace: ai-serving
