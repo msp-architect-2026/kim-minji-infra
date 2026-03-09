@@ -1,29 +1,32 @@
-grafana:
-  adminPassword: "admin1234"
-  ingress:
-    enabled: true
-    ingressClassName: nginx
-    hosts:
-      - grafana.wafer.local
-    paths:
-      - /
-  grafana.ini:
-    "auth.anonymous":
+kube-prometheus-stack:
+  grafana:
+    adminPassword: "admin1234"
+    ingress:
       enabled: true
-      org_role: Viewer
-    security:
-      allow_embedding: true
+      ingressClassName: nginx
+      hosts:
+        - grafana.wafer.local
+      paths:
+        - /
+    grafana.ini:
+      analytics:
+        check_for_updates: false
+      security:
+        allow_embedding: true
+      auth.anonymous:
+        enabled: true
+        org_role: Viewer
 
-prometheus:
-  prometheusSpec:
-    retention: 7d
-    resources:
-      requests:
-        cpu: 200m
-        memory: 512Mi
-      limits:
-        cpu: 500m
-        memory: 1Gi
+  prometheus:
+    prometheusSpec:
+      retention: 7d
+      resources:
+        requests:
+          cpu: 200m
+          memory: 512Mi
+        limits:
+          cpu: 500m
+          memory: 1Gi
 
-alertmanager:
-  enabled: false
+  alertmanager:
+    enabled: false
