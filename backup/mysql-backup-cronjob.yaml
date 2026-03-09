@@ -23,7 +23,7 @@ spec:
               FILENAME=backup_${DATE}.sql
               echo "백업 시작: ${FILENAME}"
               mysqldump -h mysql-mysql.storage.svc.cluster.local \
-                -u admin -pCHANGE_ME waferdb > /tmp/${FILENAME}  
+                -u admin -pCHANGE_ME --no-tablespaces waferdb > /tmp/${FILENAME}  
               mc alias set local http://minio-minio.storage.svc.cluster.local:9000 minioadmin minioadmin123
               mc cp /tmp/${FILENAME} local/wafer-backup/${FILENAME}
               echo "백업 완료: wafer-backup/${FILENAME}"
