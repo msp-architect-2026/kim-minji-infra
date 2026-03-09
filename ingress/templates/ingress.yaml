@@ -49,3 +49,25 @@ spec:
                 name: {{ .Values.ingress.ai.serviceName }}
                 port:
                   number: {{ .Values.ingress.ai.servicePort }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: wafer-grafana-ingress
+  namespace: monitoring
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: {{ .Values.ingress.grafana.host }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ .Values.ingress.grafana.serviceName }}
+                port:
+                  number: {{ .Values.ingress.grafana.servicePort }}
+               

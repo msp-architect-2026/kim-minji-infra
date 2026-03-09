@@ -14,3 +14,8 @@ ingress:
     serviceName: ai-serving-ai-serving
     servicePort: 8000
     serviceNamespace: ai-serving
+  grafana:
+    host: grafana.wafer.local
+    serviceName: monitoring-grafana
+    servicePort: 80
+    serviceNamespace: monitoring  
