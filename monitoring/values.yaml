@@ -8,7 +8,7 @@ grafana:
     paths:
       - /
   grafana.ini:
-    auth.anonymous:
+    "auth.anonymous":
       enabled: true
       org_role: Viewer
     security:
