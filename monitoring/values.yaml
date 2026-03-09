@@ -7,6 +7,12 @@ grafana:
       - grafana.wafer.local
     paths:
       - /
+  grafana.ini:
+    auth.anonymous:
+      enabled: true
+      org_role: Viewer
+    security:
+      allow_embedding: true
 
 prometheus:
   prometheusSpec:
