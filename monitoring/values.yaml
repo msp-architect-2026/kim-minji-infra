@@ -16,6 +16,8 @@ kube-prometheus-stack:
       auth.anonymous:
         enabled: true
         org_role: Viewer
+      date_formats:
+        default_timezone: Asia/Seoul  
 
   prometheus:
     prometheusSpec:
