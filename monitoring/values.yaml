@@ -554,6 +554,139 @@ kube-prometheus-stack:
               "version": 7,
               "weekStart": ""
             }
+        loki-logs:
+          json: |
+            {
+              "annotations": {
+                "list": [
+                  {
+                    "builtIn": 1,
+                    "datasource": {
+                      "type": "grafana",
+                      "uid": "-- Grafana --"
+                    },
+                    "enable": true,
+                    "hide": true,
+                    "iconColor": "rgba(0, 211, 255, 1)",
+                    "name": "Annotations & Alerts",
+                    "type": "dashboard"
+                  }
+                ]
+              },
+              "editable": true,
+              "fiscalYearStartMonth": 0,
+              "graphTooltip": 0,
+              "id": 29,
+              "links": [],
+              "panels": [
+                {
+                  "datasource": {
+                    "type": "loki",
+                    "uid": "P8E80F9AEF21F6940"
+                  },
+                  "fieldConfig": {
+                    "defaults": {},
+                    "overrides": []
+                  },
+                  "gridPos": {
+                    "h": 16,
+                    "w": 13,
+                    "x": 5,
+                    "y": 0
+                  },
+                  "id": 2,
+                  "options": {
+                    "dedupStrategy": "none",
+                    "enableInfiniteScrolling": false,
+                    "enableLogDetails": true,
+                    "prettifyLogMessage": false,
+                    "showCommonLabels": false,
+                    "showLabels": false,
+                    "showTime": false,
+                    "sortOrder": "Descending",
+                    "wrapLogMessage": false
+                  },
+                  "pluginVersion": "11.5.1",
+                  "targets": [
+                    {
+                      "datasource": {
+                        "type": "loki",
+                        "uid": "P8E80F9AEF21F6940"
+                      },
+                      "direction": "backward",
+                      "editorMode": "code",
+                      "expr": "{namespace=\"ai-serving\"}",
+                      "queryType": "range",
+                      "refId": "A"
+                    }
+                  ],
+                  "title": "AI-serving 로그",
+                  "type": "logs"
+                },
+                {
+                  "datasource": {
+                    "type": "loki",
+                    "uid": "P8E80F9AEF21F6940"
+                  },
+                  "fieldConfig": {
+                    "defaults": {},
+                    "overrides": []
+                  },
+                  "gridPos": {
+                    "h": 27,
+                    "w": 13,
+                    "x": 5,
+                    "y": 16
+                  },
+                  "id": 1,
+                  "options": {
+                    "dedupStrategy": "none",
+                    "enableInfiniteScrolling": false,
+                    "enableLogDetails": true,
+                    "prettifyLogMessage": false,
+                    "showCommonLabels": false,
+                    "showLabels": false,
+                    "showTime": false,
+                    "sortOrder": "Descending",
+                    "wrapLogMessage": false
+                  },
+                  "pluginVersion": "11.5.1",
+                  "targets": [
+                    {
+                      "datasource": {
+                        "type": "loki",
+                        "uid": "P8E80F9AEF21F6940"
+                      },
+                      "direction": "backward",
+                      "editorMode": "code",
+                      "expr": "{namespace=\"application\", container=\"backend\"}",
+                      "queryType": "range",
+                      "refId": "A"
+                    }
+                  ],
+                  "title": "Backend 로그",
+                  "type": "logs"
+                }
+              ],
+              "preload": false,
+              "refresh": "",
+              "schemaVersion": 40,
+              "tags": [],
+              "templating": {
+                "list": []
+              },
+              "time": {
+                "from": "now-6h",
+                "to": "now"
+              },
+              "timepicker": {},
+              "timezone": "Asia/Seoul",
+              "title": "로그",
+              "uid": "dffnj57aiurcwc",
+              "version": 3,
+              "weekStart": ""
+            }
+  
 
   prometheus:
     prometheusSpec:
