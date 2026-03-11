@@ -1,0 +1,28 @@
+# ai-serving: ingress, backend, monitoring에서 인바운드 허용
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ai-serving-netpol
+  namespace: ai-serving
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: ai-serving
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: ingress-nginx
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: application
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: backend
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: monitoring
