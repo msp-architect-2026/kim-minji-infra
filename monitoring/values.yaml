@@ -1,6 +1,3 @@
-`monitoring/values.yaml` 전문이야:
-
-```yaml
 kube-prometheus-stack:
   grafana:
     adminPassword: "admin1234"
