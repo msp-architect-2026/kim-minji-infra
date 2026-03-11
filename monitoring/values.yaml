@@ -19,6 +19,13 @@ kube-prometheus-stack:
       date_formats:
         default_timezone: Asia/Seoul
 
+    additionalDataSources:
+      - name: Loki
+        type: loki
+        url: http://loki-loki-stack.monitoring.svc.cluster.local:3100
+        access: proxy
+        isDefault: false
+
     dashboardProviders:
       dashboardproviders.yaml:
         apiVersion: 1
