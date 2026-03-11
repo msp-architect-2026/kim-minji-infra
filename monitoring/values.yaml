@@ -1,3 +1,6 @@
+`monitoring/values.yaml` 전문이야:
+
+```yaml
 kube-prometheus-stack:
   grafana:
     adminPassword: "admin1234"
@@ -590,8 +593,8 @@ kube-prometheus-stack:
                   },
                   "gridPos": {
                     "h": 16,
-                    "w": 13,
-                    "x": 5,
+                    "w": 24,
+                    "x": 0,
                     "y": 0
                   },
                   "id": 2,
@@ -602,9 +605,9 @@ kube-prometheus-stack:
                     "prettifyLogMessage": false,
                     "showCommonLabels": false,
                     "showLabels": false,
-                    "showTime": false,
+                    "showTime": true,
                     "sortOrder": "Descending",
-                    "wrapLogMessage": false
+                    "wrapLogMessage": true
                   },
                   "pluginVersion": "11.5.1",
                   "targets": [
@@ -634,8 +637,8 @@ kube-prometheus-stack:
                   },
                   "gridPos": {
                     "h": 27,
-                    "w": 13,
-                    "x": 5,
+                    "w": 24,
+                    "x": 0,
                     "y": 16
                   },
                   "id": 1,
@@ -646,9 +649,9 @@ kube-prometheus-stack:
                     "prettifyLogMessage": false,
                     "showCommonLabels": false,
                     "showLabels": false,
-                    "showTime": false,
+                    "showTime": true,
                     "sortOrder": "Descending",
-                    "wrapLogMessage": false
+                    "wrapLogMessage": true
                   },
                   "pluginVersion": "11.5.1",
                   "targets": [
@@ -686,7 +689,6 @@ kube-prometheus-stack:
               "version": 3,
               "weekStart": ""
             }
-  
 
   prometheus:
     prometheusSpec:
