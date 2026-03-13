@@ -26,6 +26,19 @@ Nginx Ingress, Prometheus+Grafana 모니터링 스택, Loki 로깅, 백업 CronJ
 
 ---
 
+
+## ▍관련 레포지토리
+
+| Repository | 설명 |
+|------------|------|
+| [kim-minji-wiki](https://github.com/msp-architect-2026/kim-minji-wiki) | 프로젝트 메인 (Wiki, 칸반보드) |
+| [kim-minji-helm](https://github.com/msp-architect-2026/kim-minji-helm) | 애플리케이션 Helm Chart |
+| [kim-minji-backend](https://github.com/msp-architect-2026/kim-minji-backend) | Spring Boot API 서버 |
+| [kim-minji-frontend](https://github.com/msp-architect-2026/kim-minji-frontend) | React 웹 대시보드 |
+| [kim-minji-ai](https://github.com/msp-architect-2026/kim-minji-ai) | FastAPI AI 추론 서비스 |
+
+---
+
 ## ▍노드 구성
 
 | 노드 | IP | 역할 | 주요 워크로드 |
@@ -166,14 +179,5 @@ gitlab.local:53 {
 
 클러스터 내부에서 `gitlab.local → 192.168.0.157`로 DNS 해석하여 gitlab-runner 및 각 Pod의 Registry 이미지 pull을 지원합니다.
 
----
 
-## ▍관련 레포지토리
 
-| Repository | 설명 |
-|------------|------|
-| [kim-minji-wiki](https://github.com/msp-architect-2026/kim-minji-wiki) | 프로젝트 메인 (Wiki, 칸반보드) |
-| [kim-minji-helm](https://github.com/msp-architect-2026/kim-minji-helm) | 애플리케이션 Helm Chart |
-| [kim-minji-backend](https://github.com/msp-architect-2026/kim-minji-backend) | Spring Boot API 서버 |
-| [kim-minji-frontend](https://github.com/msp-architect-2026/kim-minji-frontend) | React 웹 대시보드 |
-| [kim-minji-ai](https://github.com/msp-architect-2026/kim-minji-ai) | FastAPI AI 추론 서비스 |
