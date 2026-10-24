@@ -60,6 +60,8 @@ kim-minji-infra/
 ├── loki/             # Loki + Promtail 로깅 스택
 ├── backup/           # MySQL / MinIO 백업 CronJob
 ├── network-policy/   # Calico NetworkPolicy (네임스페이스 간 접근 제어)
+├── coredns/          # CoreDNS replica 2 + 노드 분산 배치 (k3s 기본 Deployment에 SSA 패치)
+├── node-local-dns/   # NodeLocal DNSCache DaemonSet
 └── argocd/           # ArgoCD Application 매니페스트
 ```
 
@@ -178,6 +180,31 @@ gitlab.local:53 {
 ```
 
 클러스터 내부에서 `gitlab.local → 192.168.0.157`로 DNS 해석하여 gitlab-runner 및 각 Pod의 Registry 이미지 pull을 지원합니다.
+
+---
+
+## ▍DNS 구성
+
+```
+Pod (dnsConfig ndots:2)
+└─ 10.43.0.10 (kube-dns Service IP)
+   └─ 같은 노드의 NodeLocal DNSCache (hostNetwork, iptables로 가로챔)
+      ├─ 캐시 hit → 바로 응답
+      └─ 캐시 miss → kube-dns-upstream → CoreDNS (replica 2, 노드 분산)
+```
+
+| 구성 | 설정 | 이유 |
+|------|------|------|
+| Pod `dnsConfig` | `ndots: 2` (kim-minji-helm backend, ai-serving) | `*.svc.cluster.local` FQDN 조회 시 search domain 확장 질의 제거 |
+| NodeLocal DNSCache | DaemonSet, `169.254.20.10` + `10.43.0.10` listen, CPU limit 1000m | 노드 단위 캐싱으로 CoreDNS 부하·조회 지연 감소. limit이 낮으면 throttling으로 캐시가 병목 |
+| NodeLocal 외부 이름(`.`) | CoreDNS로 forward | CoreDNS custom 설정(`gitlab.local`)을 그대로 따름 |
+| CoreDNS | replica 2, `topologySpreadConstraints` (hostname, `DoNotSchedule`) | 단일 노드 장애 시에도 다른 노드의 replica가 응답 |
+
+- NodeLocal DNSCache는 kube-proxy **iptables 모드** 기준입니다. kubelet `--cluster-dns` 변경은 필요 없습니다.
+- CoreDNS 본체는 k3s가 관리합니다. `coredns/` Application은 Server-Side Apply로 `replicas`와 `topologySpreadConstraints`만 덧씌우고, `Prune=false,Delete=false`로 Application 삭제 시에도 CoreDNS를 지우지 않습니다.
+- `coredns/` Application을 지워도 replicas는 2로 남습니다. 되돌리려면 `kubectl -n kube-system scale deploy coredns --replicas=1`을 직접 실행합니다.
+- 배포 순서: `coredns` → CoreDNS 2개 Ready·노드 분산 확인 → `node-local-dns`.
+- NodeLocal 롤백: `kubectl -n kube-system delete ds node-local-dns`. node-cache가 종료 시 iptables 규칙과 `nodelocaldns` 인터페이스를 정리해 kube-proxy → CoreDNS 경로로 돌아갑니다.
 
 
 
