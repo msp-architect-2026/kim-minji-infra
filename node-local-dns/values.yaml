@@ -1,0 +1,18 @@
+# kube-proxy iptables 모드 기준 (kubelet --cluster-dns 변경 없이 kube-dns Service IP를 노드에서 가로챔)
+localDns: 169.254.20.10
+clusterDns: 10.43.0.10   # kubectl -n kube-system get svc kube-dns -o jsonpath='{.spec.clusterIP}'
+clusterDomain: cluster.local
+
+image:
+  repository: registry.k8s.io/dns/k8s-dns-node-cache
+  tag: "1.26.8"
+
+# CPU limit이 낮으면 부하 시 throttling으로 캐시가 병목이 된다
+# OOM kill(SIGKILL) 시 iptables 규칙이 남아 노드 DNS가 끊기므로 memory limit은 여유 있게 둔다
+resources:
+  requests:
+    cpu: 100m
+    memory: 64Mi
+  limits:
+    cpu: 1000m
+    memory: 256Mi
