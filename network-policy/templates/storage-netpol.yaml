@@ -1,0 +1,56 @@
+# mysql: backend, storage(백업 CronJob)에서만 인바운드 허용
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mysql-netpol
+  namespace: storage
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: mysql
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: application
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: backend
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: storage
+---
+# minio: backend, ai-serving, storage(백업 CronJob)에서만 인바운드 허용
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: minio-netpol
+  namespace: storage
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: minio
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: application
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: backend
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: ai-serving
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: ai-serving
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: storage

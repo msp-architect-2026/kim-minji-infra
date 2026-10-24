@@ -1,0 +1,18 @@
+stages:
+  - build
+
+build-backup-image:
+  stage: build
+  image:
+    name: gcr.io/kaniko-project/executor:v1.9.0-debug
+    entrypoint: [""]
+  script:
+    - mkdir -p /kaniko/.docker
+    - echo "{\"auths\":{\"gitlab.local:5050\":{\"auth\":\"$(echo -n ${CI_REGISTRY_USER}:${CI_REGISTRY_PASSWORD} | base64)\"}}}" > /kaniko/.docker/config.json
+    - /kaniko/executor
+      --context ${CI_PROJECT_DIR}/backup
+      --dockerfile ${CI_PROJECT_DIR}/backup/Dockerfile
+      --destination gitlab.local:5050/${CI_PROJECT_PATH}/mysql-backup:latest
+  only:
+    changes:
+      - backup/Dockerfile

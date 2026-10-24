@@ -1,0 +1,29 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: minio-backup
+  namespace: storage
+spec:
+  schedule: "0 3 * * *"
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: minio-backup
+            image: gitlab.local:5050/root/kim-minji-infra/mysql-backup:latest
+            imagePullPolicy: Always
+            command:
+            - /bin/sh
+            - -c
+            - |
+              echo "MinIO 백업 시작"
+              mc alias set local http://minio-minio.storage.svc.cluster.local:9000 minioadmin minioadmin123
+              mc mirror local/wafer-images local/wafer-backup/wafer-images
+              mc mirror local/wafer-model local/wafer-backup/wafer-model
+              echo "MinIO 백업 완료"
+          imagePullSecrets:
+          - name: gitlab-registry-secret
+          restartPolicy: OnFailure

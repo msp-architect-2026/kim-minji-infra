@@ -1,0 +1,20 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: backup
+  namespace: gitops
+spec:
+  project: default
+  source:
+    repoURL: http://gitlab.local:8929/root/kim-minji-infra.git
+    targetRevision: HEAD
+    path: backup
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: storage
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
