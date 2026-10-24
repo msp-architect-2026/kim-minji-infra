@@ -1,0 +1,24 @@
+# k3s가 배포한 CoreDNS Deployment에 replica 수와 노드 분산 제약만 Server-Side Apply로 덧씌운다.
+# 나머지 필드는 k3s(/var/lib/rancher/k3s/server/manifests/coredns.yaml)가 계속 관리한다.
+# Prune/Delete=false: 이 Application을 지워도 CoreDNS Deployment는 삭제되지 않는다.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: coredns
+  namespace: kube-system
+  annotations:
+    argocd.argoproj.io/sync-options: Prune=false,Delete=false
+    # 부분 매니페스트라 client-side diff는 기본값 필드를 OutOfSync로 오판할 수 있다
+    argocd.argoproj.io/compare-options: ServerSideDiff=true
+spec:
+  replicas: {{ .Values.replicaCount }}
+  template:
+    spec:
+      # 노드당 최대 1개 차이로 분산해 단일 노드 장애 시에도 다른 노드의 replica가 응답한다
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              k8s-app: kube-dns
