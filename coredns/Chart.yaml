@@ -1,0 +1,5 @@
+apiVersion: v2
+name: coredns
+description: CoreDNS replica and placement for wafer defect detection system
+type: application
+version: 0.1.0
