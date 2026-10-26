@@ -19,11 +19,24 @@ spec:
             - /bin/sh
             - -c
             - |
+              set -eu
               echo "MinIO 백업 시작"
-              mc alias set local http://minio-minio.storage.svc.cluster.local:9000 minioadmin minioadmin123
+              mc alias set local http://minio-minio.storage.svc.cluster.local:9000 "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
               mc mirror local/wafer-images local/wafer-backup/wafer-images
               mc mirror local/wafer-model local/wafer-backup/wafer-model
               echo "MinIO 백업 완료"
+            env:
+            # 계정 정보는 같은 storage 네임스페이스의 minio-secret(SealedSecret으로 관리)에서 읽는다
+            - name: MINIO_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: minio-secret
+                  key: accessKey
+            - name: MINIO_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: minio-secret
+                  key: secretKey
           imagePullSecrets:
           - name: gitlab-registry-secret
           restartPolicy: OnFailure
