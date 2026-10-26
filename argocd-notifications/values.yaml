@@ -1,0 +1,41 @@
+# ArgoCD 설치가 만든 argocd-notifications-cm / argocd-notifications-secret을 이 차트가 이어받는다 (RUNBOOK 5.4)
+# 아래 문자열은 ArgoCD Notifications의 Go 템플릿이다 (Helm이 해석하지 않도록 values에 둔다)
+config:
+  # Slack Incoming Webhook. URL은 Secret의 slack-webhook-url 키
+  service.webhook.slack-webhook: |
+    url: $slack-webhook-url
+    headers:
+      - name: Content-Type
+        value: application/json
+  template.app-sync-failed: |
+    webhook:
+      slack-webhook:
+        method: POST
+        body: |
+          {"text": {{ printf ":x: *ArgoCD sync 실패* `%s` (rev %s)\n%s" .app.metadata.name (.app.status.sync.revision | trunc 7) .app.status.operationState.message | toJson }}}
+  template.app-health-degraded: |
+    webhook:
+      slack-webhook:
+        method: POST
+        body: |
+          {"text": {{ printf ":warning: *ArgoCD 앱 Degraded* `%s` (health: %s)" .app.metadata.name .app.status.health.status | toJson }}}
+  trigger.on-sync-failed: |
+    - when: app.status.operationState != nil and app.status.operationState.phase in ['Error', 'Failed']
+      oncePer: app.status.operationState?.syncResult?.revision
+      send: [app-sync-failed]
+  trigger.on-health-degraded: |
+    - when: app.status.health.status == 'Degraded'
+      oncePer: app.status.sync.revision
+      send: [app-health-degraded]
+  # 모든 Application에 기본 구독 (Application마다 annotation을 달 필요 없음)
+  subscriptions: |
+    - recipients:
+        - slack-webhook
+      triggers:
+        - on-sync-failed
+        - on-health-degraded
+
+# Slack Incoming Webhook URL. kubeseal로 암호화한 값 (RUNBOOK 5.4). 값이 비어 있으면 렌더링 실패
+sealedSecret:
+  encryptedData: {}
+    # slack-webhook-url: AgB...

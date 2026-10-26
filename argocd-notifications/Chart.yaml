@@ -1,0 +1,4 @@
+apiVersion: v2
+name: argocd-notifications
+description: ArgoCD Notifications 설정 (sync 실패·Degraded → Slack Incoming Webhook)
+version: 1.0.0
