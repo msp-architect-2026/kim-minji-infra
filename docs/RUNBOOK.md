@@ -33,6 +33,9 @@
 | C9 | **(4.1 전 필수)** MetalLB IP 대역 / Traefik LB IP | `PLACEHOLDER-IP-RANGE` | `metallb/values.yaml` `ipAddressPool.addresses` | 노드 IP(.57/.157/.240)·공유기 DHCP 범위와 겹치지 않는 대역(예: `192.168.0.200-192.168.0.209`). 할당된 Traefik IP는 `kubectl -n traefik get svc traefik`. UTM 브리지가 맥 Wi-Fi면 L2 광고(ARP)가 맥 외부로 안 나갈 수 있다 → 맥에서 `curl http://<LB IP>`로 확인, 안 되면 NodePort 32088 경로를 계속 쓴다 |
 | C10 | 기존 ingress-nginx 설치 방식·네임스페이스 | NetworkPolicy가 참조하던 `ingress-nginx` 네임스페이스 | — | `helm list -A \| grep ingress`, `kubectl get ns`. 4.4 전환 시 삭제 대상 |
 | C11 | k3s 내장 traefik·servicelb 사용 여부 | 둘 다 꺼야 함 | cp1 `/etc/rancher/k3s/config.yaml` | `kubectl -n kube-system get helmchart`(`traefik`, `traefik-crd` 없어야 함), `kubectl -n kube-system get ds \| grep svclb` |
+| C13 | 외부 접속 방식 (HTTPS) | LB IP 443 기준: Traefik 리다이렉트 `to: websecure`(→:443), frontend `https://api.wafer.local`, `https://grafana.wafer.local` | `traefik/values.yaml` `ports.web.http.redirections.entryPoint.to`, GitLab frontend CI 변수 `VITE_API_URL`·`VITE_GRAFANA_URL`(5.1), `kim-minji-frontend/.env` | C9의 MetalLB IP가 맥에서 접속되면 그대로. **NodePort로만 접속 가능하면** 리다이렉트를 `":32443"`, frontend URL을 `https://*.wafer.local:32443`으로 바꾼다 (backend CORS는 두 경우 모두 허용) |
+| C14 | 앱 네임스페이스의 다른 Pod·외부 통신 | default-deny 대상: application, ai-serving, storage | `network-policy/templates/egress.yaml` | `kubectl get pod -n application -n ai-serving -n storage`로 frontend·backend·ai-serving·mysql·minio·backup Job 외의 Pod가 있는지, backend·ai-serving이 클러스터 밖(외부 API 등)을 호출하는지 확인. 있으면 egress 규칙 추가 |
+| C15 | GitLab Runner 인터넷 접근 (Trivy) | `aquasec/trivy:0.75.0` 이미지 pull, 취약점 DB(ghcr.io) 다운로드 | 앱 레포 `.gitlab-ci.yml` `image_scan` | Runner에서 `ghcr.io`, Docker Hub 접근 가능 여부. 막혀 있으면 job이 실패(allow_failure라 배포는 진행) |
 | C12 | VM vCPU 수 | dev는 cp1 1대에 CPU requests ~2.0~2.3 core + instance-manager 예약(5%)이 몰린다 → **cp1 3 vCPU 이상** 권장. full instance-manager는 노드마다 8% | UTM 설정 | `kubectl describe node` Capacity·Allocated resources |
 
 ## 2. 사전 백업
@@ -144,6 +147,7 @@ ingress-nginx는 2026년 3월 유지보수가 끝나 Traefik으로 교체했다.
 5. 맥에서 `curl -H 'Host: app.wafer.local' http://192.168.0.57:32088/` 응답 확인. LB IP를 쓰려면 `/etc/hosts`의 `*.wafer.local`을 Traefik EXTERNAL-IP로 바꾸고 포트 없이 접속 (UTM 브리지가 Wi-Fi면 L2 ARP가 맥 밖으로는 안 나갈 수 있다 — C9)
 6. 기존 ingress-nginx의 `nginx.ingress.kubernetes.io/rewrite-target: /`는 경로 `/`에 대해 실질적으로 동작이 없어 제거했다. 경로 재작성이 필요한 화면이 있으면 Traefik Middleware로 추가
 7. Grafana Ingress는 monitoring 차트 것만 남겼다 (ingress 차트의 `wafer-grafana-ingress`는 중복이라 제거 → ArgoCD prune으로 삭제됨)
+8. (항목 3) HTTP 요청은 HTTPS로 리다이렉트된다. 인증서는 cert-manager가 `wafer-ca`로 발급한다 (`kubectl get certificate -A` Ready). 맥에 CA를 신뢰 등록(4.6)하지 않으면 브라우저 경고가 뜬다. 리다이렉트 대상 포트는 C13
 
 ### 4.5 노드 준비·k3s 설정 (항목 2)
 
@@ -186,8 +190,35 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 
 | 시크릿 | 네임스페이스 | 위치 | 상태 |
 |---|---|---|---|
-| `mysql-secret` (4개 키) | storage | `kim-minji-helm/mysql/values.yaml` `sealedSecret.encryptedData` | helm#3 |
-| 그 밖의 항목 | | | 작성 예정 (항목 3, 4, 6) |
+| `mysql-secret` (4개 키) | storage | `kim-minji-helm/mysql/values.yaml` `sealedSecret.encryptedData` | helm#3. **현재 클러스터 값 그대로** 암호화 (kim-minji-helm README) |
+| `minio-secret` (`accessKey`, `secretKey`) | storage | `kim-minji-helm/minio/values.yaml` `sealedSecret.encryptedData` | **현재 클러스터 값 그대로** 암호화, 기존 Secret annotate (kim-minji-helm README) |
+| `grafana-admin` (`admin-user`, `admin-password`) | monitoring | `kim-minji-infra/monitoring/values.yaml` `grafanaAdmin.sealedSecret.encryptedData` | 새 비밀번호로 생성 (아래 5.2) |
+| 그 밖의 항목 | | | 작성 예정 (항목 4, 6) |
+
+- 세 차트 모두 값이 비어 있으면 **렌더링이 실패**한다 (평문 배포 방지). ArgoCD 앱이 `ComparisonError`로 멈추고 기존 리소스는 그대로 남는다. 4.1 전에 모두 채워 커밋한다.
+- 백업 CronJob은 `mysql-secret`, `minio-secret`을 그대로 참조하므로 별도 시크릿이 없다.
+
+### 5.1 GitLab CI 변수 (frontend 프로젝트, 시크릿 아님)
+
+| 변수 | 값 (C13) |
+|---|---|
+| `VITE_API_URL` | `https://api.wafer.local` (NodePort만 가능하면 `https://api.wafer.local:32443`) |
+| `VITE_GRAFANA_URL` | `https://grafana.wafer.local` (NodePort만 가능하면 `https://grafana.wafer.local:32443`) |
+
+값을 바꾼 뒤 frontend 파이프라인을 다시 돌려야 이미지에 반영된다.
+
+### 5.2 grafana-admin 생성
+
+```bash
+NS=monitoring; NAME=grafana-admin
+read -r -s -p "새 Grafana admin 비밀번호: " PW; echo
+for kv in "admin-user=admin" "admin-password=$PW"; do
+  k=${kv%%=*}; v=${kv#*=}
+  printf '      %s: %s\n' "$k" "$(printf '%s' "$v" | kubeseal --raw --namespace $NS --name $NAME --from-file=/dev/stdin)"
+done
+```
+
+출력된 2줄을 `monitoring/values.yaml`의 `grafanaAdmin.sealedSecret.encryptedData: {}`에서 `{}`를 지우고 붙여 넣는다. Grafana는 영속 볼륨이 없어(재시작마다 초기화) 새 Secret 값이 바로 admin 비밀번호가 된다.
 
 ## 6. 배포 후 확인 체크리스트
 
@@ -205,6 +236,11 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 - [ ] cert-manager: `kubectl get clusterissuer wafer-ca` Ready=True
 - [ ] Longhorn: `kubectl -n longhorn-system get nodes.longhorn.io` cp1 Ready·Schedulable, 볼륨이 있으면 복제본이 cp1에 있음
 - [ ] Sealed Secrets: 기존 SealedSecret(backend-secret 등) `kubectl get sealedsecret -A` 모두 Synced (키 인계 확인)
+- [ ] (항목 3) `mysql-secret`, `minio-secret`, `grafana-admin` SealedSecret Synced, mysql·minio Pod 재시작 후에도 정상 (값이 기존과 같아야 함)
+- [ ] (항목 3) HTTPS: `curl -I http://app.wafer.local` → 308 → `https://...`, `curl --cacert wafer-root-ca.crt https://app.wafer.local` 200. frontend Monitoring 페이지의 Grafana iframe 3개 표시
+- [ ] (항목 3) Grafana: 비로그인으로 대시보드 조회 가능, Explore 메뉴 없음, 새 admin 비밀번호로 로그인
+- [ ] (항목 3) NetworkPolicy: 웨이퍼 이미지 업로드 → 추론 → 결과 저장 E2E 성공 (frontend→backend→ai-serving, backend→mysql/minio, ai-serving→minio). 막힌 경로 테스트: `kubectl -n application run np-test --rm -it --image=busybox -- wget -T3 -O- http://minio-minio.storage:9000` → 실패해야 정상
+- [ ] (항목 3) 백업 Job 수동 실행 성공: `kubectl -n storage create job --from=cronjob/mysql-backup mysql-backup-manual` → Completed, 로그에 "백업 완료"
 
 ### 6.2 full, 3대 모두 켠 상태
 
@@ -227,9 +263,11 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
   2. ApplicationSet이 `preserveResourcesOnDeletion: true`라 Traefik 리소스는 남는다 → 직접 삭제해 NodePort 32088·IngressClass를 비운다:
      `kubectl delete ns traefik`, `kubectl delete ingressclass traefik`, `kubectl delete clusterrole,clusterrolebinding traefik-traefik`
   3. 기존 ingress-nginx 재설치 (NodePort 32088)
+- NetworkPolicy 롤백: `network-policy/values.yaml`의 `defaultDenyNamespaces: []`로 커밋 → default-deny·DNS 허용 정책만 제거된다 (기존 ingress 허용 규칙은 유지)
+- HTTPS 리다이렉트 롤백: `traefik/values.yaml`의 `ports.web.http.redirections` 제거 커밋 (TLS 인증서는 그대로 두어도 무방)
 - k3s 설정 롤백: `/etc/rancher/k3s/config.yaml`의 `disable` 항목 제거 후 `systemctl restart k3s`
 
-작성 예정 (항목 3~9). 원칙:
+작성 예정 (항목 4~9). 원칙:
 
 - 코드 롤백은 Git revert → ArgoCD sync
 - 프로파일 전환 롤백은 클러스터 Secret의 `env` 라벨을 이전 값으로 되돌린다
