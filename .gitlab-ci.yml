@@ -16,3 +16,16 @@ build-backup-image:
   only:
     changes:
       - backup/Dockerfile
+
+# 파이프라인의 어떤 job이든 실패하면 Slack으로 알린다 (allow_failure인 image_scan 실패는 제외)
+# SLACK_WEBHOOK_URL: GitLab CI/CD 변수(masked)에 Incoming Webhook URL을 넣는다. 없으면 건너뛴다
+notify_failure:
+  stage: .post
+  image: curlimages/curl:8.22.0
+  when: on_failure
+  script:
+    - |
+      if [ -z "${SLACK_WEBHOOK_URL:-}" ]; then echo "SLACK_WEBHOOK_URL 미설정 → 알림 생략"; exit 0; fi
+      TEXT=":rotating_light: *GitLab CI 실패* ${CI_PROJECT_NAME} \`${CI_COMMIT_REF_NAME}\` (${CI_COMMIT_SHORT_SHA}) by ${GITLAB_USER_LOGIN}\n${CI_PIPELINE_URL}"
+      printf '{"text":"%s"}' "$TEXT" > /tmp/payload.json
+      curl -fsS -X POST -H 'Content-Type: application/json' --data @/tmp/payload.json "$SLACK_WEBHOOK_URL"

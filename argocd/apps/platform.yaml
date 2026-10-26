@@ -56,6 +56,10 @@ spec:
                 - chart: backup
                   namespace: storage
                   serverSideApply: "false"
+                # 항목 6: ArgoCD 설치가 만든 Notifications ConfigMap을 이어받으므로 SSA
+                - chart: argocd-notifications
+                  namespace: gitops
+                  serverSideApply: "true"
   template:
     metadata:
       name: '{{ .chart }}'
