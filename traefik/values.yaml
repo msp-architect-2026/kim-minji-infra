@@ -13,7 +13,8 @@ traefik:
       # 기존 접속 주소(*.wafer.local:32088)를 유지한다
       nodePort: 32088
       # 모든 HTTP 요청을 HTTPS로 리다이렉트한다 (frontend의 Grafana iframe·API 호출이 혼합 콘텐츠로 막히지 않게)
-      # to: websecure → 443으로 보낸다(MetalLB LB IP 접속 기준). NodePort로만 접속한다면 ":32443"으로 바꾼다 (RUNBOOK C13)
+      # to: websecure → 443으로 보낸다(MetalLB LB IP 접속 기준). 차트는 to에 포트 번호를 받지 않으므로
+      # NodePort로만 접속한다면 이 블록 대신 additionalArguments로 :32443 리다이렉트를 건다 (RUNBOOK C13)
       http:
         redirections:
           entryPoint:

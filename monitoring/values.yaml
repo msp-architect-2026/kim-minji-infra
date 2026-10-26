@@ -30,6 +30,9 @@ kube-prometheus-stack:
     grafana.ini:
       analytics:
         check_for_updates: false
+      server:
+        # 공유 링크·리다이렉트 주소. NodePort로만 접속한다면 https://grafana.wafer.local:32443/ (RUNBOOK C13)
+        root_url: https://grafana.wafer.local/
       security:
         # frontend Monitoring 페이지가 대시보드를 iframe으로 띄운다
         allow_embedding: true
