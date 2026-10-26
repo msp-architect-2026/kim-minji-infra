@@ -1,0 +1,4 @@
+# full 프로파일: 3노드 모두 켠 To-Be 구성 (values.yaml 기본값과 같다)
+replicaCount: 2
+topologySpread:
+  whenUnsatisfiable: DoNotSchedule

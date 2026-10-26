@@ -1,0 +1,6 @@
+# full 프로파일: 3노드 모두 켠 To-Be 구성
+# Prometheus 보존기간(7d)·resource는 values.yaml 기본값을 쓴다
+kube-prometheus-stack:
+  prometheus:
+    prometheusSpec:
+      retention: 7d

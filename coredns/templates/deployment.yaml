@@ -18,7 +18,7 @@ spec:
       topologySpreadConstraints:
         - maxSkew: 1
           topologyKey: kubernetes.io/hostname
-          whenUnsatisfiable: DoNotSchedule
+          whenUnsatisfiable: {{ .Values.topologySpread.whenUnsatisfiable }}
           labelSelector:
             matchLabels:
               k8s-app: kube-dns

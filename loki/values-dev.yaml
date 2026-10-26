@@ -1,0 +1,18 @@
+# dev 프로파일: 노드 1~2대만 켠 개발 환경 — resource 최소
+loki-stack:
+  loki:
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: 200m
+        memory: 384Mi
+  promtail:
+    resources:
+      requests:
+        cpu: 25m
+        memory: 64Mi
+      limits:
+        cpu: 100m
+        memory: 128Mi

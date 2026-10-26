@@ -1,0 +1,4 @@
+# dev 프로파일: 노드 1~2대만 켠 개발 환경
+replicaCount: 1
+topologySpread:
+  whenUnsatisfiable: ScheduleAnyway
