@@ -1,5 +1,10 @@
 # 차트디렉터리 릴리스명 네임스페이스 [skip-schema]  (ArgoCD Application과 같게 유지)
 # skip-schema: SSA 부분 패치처럼 단독으로는 스키마를 만족하지 않는 차트
+sealed-secrets  sealed-secrets  kube-system
+metallb         metallb         metallb-system
+cert-manager    cert-manager    cert-manager
+longhorn        longhorn        longhorn-system
+traefik         traefik         traefik
 coredns         coredns         kube-system  skip-schema
 node-local-dns  node-local-dns  kube-system
 monitoring      monitoring      monitoring

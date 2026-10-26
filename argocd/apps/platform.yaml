@@ -18,6 +18,22 @@ spec:
           - clusters: {}
           - list:
               elements:
+                # 플랫폼 기반 (항목 2): 다른 앱보다 먼저 준비돼야 한다. 순서 제어는 sync wave 항목에서 다룬다
+                - chart: sealed-secrets
+                  namespace: kube-system
+                  serverSideApply: "false"
+                - chart: metallb
+                  namespace: metallb-system
+                  serverSideApply: "true"
+                - chart: cert-manager
+                  namespace: cert-manager
+                  serverSideApply: "true"
+                - chart: longhorn
+                  namespace: longhorn-system
+                  serverSideApply: "true"
+                - chart: traefik
+                  namespace: traefik
+                  serverSideApply: "true"
                 - chart: coredns
                   namespace: kube-system
                   serverSideApply: "true"
@@ -63,7 +79,7 @@ spec:
           selfHeal: true
         syncOptions:
           - CreateNamespace=true
-  # coredns(k3s Deployment 부분 패치), monitoring(CRD 크기)은 Server-Side Apply 필요
+  # coredns(k3s Deployment 부분 패치), CRD가 큰 차트(monitoring, metallb, cert-manager, longhorn, traefik)는 Server-Side Apply 필요
   templatePatch: |
     {{- if eq .serverSideApply "true" }}
     spec:
