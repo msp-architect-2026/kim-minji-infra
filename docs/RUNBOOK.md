@@ -25,7 +25,7 @@
 | C1 | k3s(Kubernetes) 버전 | `1.31.0` | `scripts/validate.sh` `K8S_VERSION` (helm, infra) | `kubectl version` |
 | C2 | ai-serving dev 메모리로 모델 로딩 가능 여부 | requests 250m/512Mi, limits 1000m/1Gi, HPA 1~2 | `kim-minji-helm/ai-serving/values-dev.yaml` | dev 배포 후 OOMKilled·readiness 실패 여부, `kubectl top pod -n ai-serving`. 부족하면 limit을 올리고 8장 표 갱신 |
 | C3 | GitLab 이전 후 호스트 IP | repoURL은 `http://gitlab.local:8929/...` 유지, IP만 변경 | CoreDNS custom 설정(`gitlab.local` hosts, 현재 `192.168.0.157`) — 레포 밖 ConfigMap | 이전한 GitLab의 IP. 맥 호스트 컨테이너면 UTM 브리지에서 보이는 맥 IP |
-| C5 | 기존 ArgoCD Application 이름 | ApplicationSet이 차트명(`frontend`, `backend`, `ai-serving`, `mysql`, `minio`, `ingress`, `network-policy`, `coredns`, `node-local-dns`, `monitoring`, `loki`)으로 생성 | `argocd/apps/*.yaml` | `kubectl -n gitops get applications`. 이름이 다르면 4.1 절차에서 non-cascade 삭제 |
+| C5 | 기존 ArgoCD Application 이름 | ApplicationSet이 차트명(`frontend`, `backend`, `ai-serving`, `mysql`, `minio`, `ingress`, `network-policy`, `coredns`, `node-local-dns`, `monitoring`, `loki`)으로 생성 | `argocd/apps/*.yaml` | `kubectl -n gitops get applications`. 이름이 다르면 4.1 절차에서 non-cascade 삭제. **앱 차트는 이름이 곧 Helm 릴리스명**이라, 다르면 리소스 이름·StatefulSet PVC가 새로 생겨 빈 DB/버킷으로 뜬다 → 해당 원소에 기존 릴리스명을 `releaseName`으로 지정하거나 2장 백업으로 데이터 이전 |
 | C6 | ArgoCD 버전 | `templatePatch`(v2.10+), `ignoreMissingValueFiles` 사용 | `argocd/apps/platform.yaml` | `argocd version` 또는 argocd-server 이미지 태그 |
 | C7 | VM 메모리 배분 | 8장 가정: cp1 8GB / w1 7GB / ai2 7GB | UTM 설정 | 8장 표와 `kubectl describe node` Allocatable |
 | C8 | 레포 밖 구성요소 실제 사용량 | 8장 추정치 | — | `kubectl top pod -A` (k3s 내장 coredns·metrics-server·local-path, ArgoCD, sealed-secrets, ingress-nginx) |
@@ -73,7 +73,7 @@
      kubectl -n gitops delete application $app
    done
    ```
-3. 클러스터 Secret(프로파일 라벨) 적용: `kubectl apply -f argocd/bootstrap/cluster-in-cluster.yaml` (기본 `env: dev`)
+3. 클러스터 Secret 적용: `kubectl apply -f argocd/bootstrap/cluster-in-cluster.yaml` (`env` 라벨 없음 = dev. 다시 apply해도 클러스터에서 붙인 라벨은 유지된다)
 4. 루트 앱 적용: `kubectl apply -f argocd/bootstrap/root.yaml` → `root` → `platform`, `apps` ApplicationSet → 차트별 Application 생성
 5. 확인: `kubectl -n gitops get applicationsets`, 모든 Application `Synced/Healthy`
 6. `backup/argocd-application.yaml`(backup 앱)은 프로파일과 무관해 그대로 둔다
@@ -93,10 +93,16 @@ kubectl taint nodes k3s-ai2 dedicated=ai-serving:PreferNoSchedule
 kubectl -n gitops label secret in-cluster env=full --overwrite
 # dev로: 노드를 끄기 전에 먼저
 kubectl -n gitops label secret in-cluster env=dev --overwrite
+# sync 완료 후, 끌 노드를 drain한 다음 전원을 끈다
+kubectl drain k3s-w1 --ignore-daemonsets --delete-emptydir-data
+kubectl drain k3s-ai2 --ignore-daemonsets --delete-emptydir-data
+# 다시 켠 뒤
+kubectl uncordon k3s-w1 k3s-ai2
 ```
 
 - 라벨을 바꾸면 ApplicationSet이 모든 Application의 valueFiles를 `values-<env>.yaml`로 바꾸고 auto-sync한다.
 - **full → dev 순서 주의**: 노드를 먼저 끄면 full의 DoNotSchedule·replica 2 Pod가 Pending/축출된다. 라벨을 먼저 바꾸고 sync 완료 후 노드를 끈다.
+- **drain 없이 끄지 않는다**: 꺼진 노드의 Deployment Pod는 약 5분 뒤에야 재생성되고, StatefulSet Pod(loki, prometheus, 레포 밖의 argocd-application-controller 등)는 Terminating에 걸려 재생성되지 않는다. ArgoCD 컨트롤러가 걸리면 아무것도 동기화되지 않는다.
 - Git의 `argocd/bootstrap/cluster-in-cluster.yaml`은 초기값(dev)이다. 라벨은 클러스터에서만 바꾼다.
 
 ## 5. 채워야 할 시크릿
@@ -114,7 +120,7 @@ kubectl -n gitops label secret in-cluster env=dev --overwrite
 
 ### 6.1 dev, cp1 1대만 켠 상태
 
-- [ ] `kubectl get pods -A --field-selector=status.phase=Pending` 결과 없음. **예외(현재 알려진 것)**:
+- [ ] Running/Completed가 아닌 Pod 없음 (Pending뿐 아니라 Terminating·Unknown 포함): `kubectl get pods -A | grep -vE 'Running|Completed'`. **예외(현재 알려진 것)**:
   - mysql, minio: local-path PV가 k3s-w1에 있으면 Pending (Longhorn 전환 전까지 — 항목 2/4)
 - [ ] coredns replica 1 Running
 - [ ] ai-serving이 cp1에 Running (ai2 선호지만 ai2가 꺼져 있으므로), OOMKilled 없음 (C2)
@@ -129,7 +135,10 @@ kubectl -n gitops label secret in-cluster env=dev --overwrite
 
 ## 7. 롤백
 
-- ApplicationSet 전환 롤백: `root` Application 삭제(ApplicationSet은 `preserveResourcesOnDeletion: true`라 리소스 유지) → 기존 Application 매니페스트(Git 이력의 `*/application.yaml`) 재적용
+- ApplicationSet 전환 롤백 (워크로드는 유지된다):
+  1. `kubectl -n gitops delete application root` (`root`에는 finalizer가 없어 ApplicationSet은 남는다)
+  2. `kubectl -n gitops delete applicationset platform apps` (`preserveResourcesOnDeletion: true`라 Application이 지워져도 리소스는 유지)
+  3. 기존 Application 매니페스트(Git 이력의 `*/application.yaml`) 재적용
 
 작성 예정 (항목 1~9). 원칙:
 
