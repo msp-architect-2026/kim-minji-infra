@@ -1,0 +1,33 @@
+# 앱 네임스페이스(application, ai-serving, storage)는 들어오는·나가는 트래픽을 기본 차단하고,
+# 필요한 경로만 *-netpol.yaml / egress.yaml에서 허용한다.
+{{- range .Values.defaultDenyNamespaces }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: {{ . }}
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  - Egress
+---
+# DNS 조회(53/UDP·TCP)는 모든 목적지로 허용한다.
+# NodeLocal DNSCache가 kube-dns Service IP(10.43.0.10)를 노드에서 가로채므로 kube-dns Pod 셀렉터로는 막힐 수 있다.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-egress
+  namespace: {{ . }}
+spec:
+  podSelector: {}
+  policyTypes:
+  - Egress
+  egress:
+  - ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+{{- end }}
