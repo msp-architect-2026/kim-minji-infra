@@ -3,10 +3,8 @@ kind: Ingress
 metadata:
   name: wafer-app-ingress
   namespace: application
-  annotations:
-    nginx.ingress.kubernetes.io/rewrite-target: /
 spec:
-  ingressClassName: nginx
+  ingressClassName: {{ .Values.ingressClassName }}
   rules:
     - host: {{ .Values.ingress.app.host }}
       http:
@@ -34,10 +32,8 @@ kind: Ingress
 metadata:
   name: wafer-ai-ingress
   namespace: ai-serving
-  annotations:
-    nginx.ingress.kubernetes.io/rewrite-target: /
 spec:
-  ingressClassName: nginx
+  ingressClassName: {{ .Values.ingressClassName }}
   rules:
     - host: {{ .Values.ingress.ai.host }}
       http:
@@ -55,10 +51,8 @@ kind: Ingress
 metadata:
   name: wafer-grafana-ingress
   namespace: monitoring
-  annotations:
-    nginx.ingress.kubernetes.io/rewrite-target: /
 spec:
-  ingressClassName: nginx
+  ingressClassName: {{ .Values.ingressClassName }}
   rules:
     - host: {{ .Values.ingress.grafana.host }}
       http:

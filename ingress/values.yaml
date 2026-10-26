@@ -1,3 +1,6 @@
+# Ingress 컨트롤러: Traefik (ingress-nginx 유지보수 종료로 교체)
+ingressClassName: traefik
+
 ingress:
   app:
     host: app.wafer.local
