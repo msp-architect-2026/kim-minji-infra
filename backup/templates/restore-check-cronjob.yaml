@@ -30,7 +30,7 @@ spec:
               set -euo pipefail
               {{- include "backup.mcSetup" . | nindent 14 }}
               if [ -n "${EXT_ENDPOINT:-}" ]; then SRC=ext/${EXT_BUCKET}/${EXT_PREFIX}/mysql; else SRC=local/${BACKUP_BUCKET}/mysql; fi
-              LATEST=$(mc ls ${SRC}/ | awk '{print $NF}' | grep '^backup_.*\.sql\.gz$' | sort | tail -1)
+              LATEST=$(mc ls ${SRC}/ | awk '{print $NF}' | grep '^backup_.*\.sql\.gz$' | sort | tail -1 || true)
               [ -n "$LATEST" ] || { echo "덤프 없음: ${SRC}"; exit 1; }
               echo "복원 대상: ${SRC}/${LATEST}"
               export MYSQL_PWD="$MYSQL_ROOT_PASSWORD"

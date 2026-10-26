@@ -1,5 +1,8 @@
-# scripts/validate.sh 전용 더미 값. 배포(ArgoCD)에는 쓰지 않는다.
+# scripts/validate.sh 전용 더미 값. 배포(ArgoCD)에는 쓰지 않는다. 외부 S3 경로까지 렌더링해 검증한다
 external:
+  enabled: true
+  endpoint: https://s3.example.invalid
+  bucket: validate-only
   sealedSecret:
     encryptedData:
       accessKey: AgDUMMY-validate-only

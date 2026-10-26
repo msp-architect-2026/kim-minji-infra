@@ -36,12 +36,16 @@
 {{- end }}
 {{- end -}}
 
-{{/* mc 별칭을 환경변수(MC_HOST_<alias>)로 설정 — 자격 증명을 명령행에 노출하지 않는다. 키에 @ : / 가 있으면 URL 인코딩 필요 */}}
+{{/* mc 별칭을 환경변수(MC_HOST_<alias>)로 설정 — 자격 증명을 명령행에 노출하지 않는다.
+     키에 / + @ : 등이 있어도 되도록 URL 인코딩한다 (AWS secret key에는 /가 흔하다) */}}
 {{- define "backup.mcSetup" -}}
-export MC_HOST_local="${MINIO_ENDPOINT%%://*}://${MINIO_ACCESS_KEY}:${MINIO_SECRET_KEY}@${MINIO_ENDPOINT#*://}"
+urlenc() { local s="$1" out="" c i; for ((i=0; i<${#s}; i++)); do c=${s:i:1}; case "$c" in [a-zA-Z0-9.~_-]) out+="$c" ;; *) printf -v c '%%%02X' "'$c"; out+="$c" ;; esac; done; printf '%s' "$out"; }
+export MC_HOST_local="${MINIO_ENDPOINT%%://*}://$(urlenc "$MINIO_ACCESS_KEY"):$(urlenc "$MINIO_SECRET_KEY")@${MINIO_ENDPOINT#*://}"
 if [ -n "${EXT_ENDPOINT:-}" ]; then
-  export MC_HOST_ext="${EXT_ENDPOINT%%://*}://${EXT_ACCESS_KEY}:${EXT_SECRET_KEY}@${EXT_ENDPOINT#*://}"
+  export MC_HOST_ext="${EXT_ENDPOINT%%://*}://$(urlenc "$EXT_ACCESS_KEY"):$(urlenc "$EXT_SECRET_KEY")@${EXT_ENDPOINT#*://}"
 fi
+# 스토리지 이전(Longhorn) 등으로 MinIO가 새로 만들어졌을 때도 1차 백업 버킷이 있게 한다
+mc mb --ignore-existing local/${BACKUP_BUCKET} >/dev/null
 {{- end -}}
 
 {{- define "backup.podLabels" -}}

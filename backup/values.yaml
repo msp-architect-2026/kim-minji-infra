@@ -24,8 +24,9 @@ minio:
 
 # 클러스터 밖 S3 호환 저장소 (AWS S3, Backblaze B2, Cloudflare R2, NAS의 S3, 맥 호스트 MinIO 등)
 # 노드(w1)가 통째로 사라져도 남는 2차 백업. 값은 RUNBOOK C16에서 확정한다
+# 확정(C16) 전에는 false: 클러스터 내 백업·복원 검증만 동작한다. 엔드포인트·버킷·계정을 채운 뒤 true로 바꾼다
 external:
-  enabled: true
+  enabled: false
   endpoint: https://PLACEHOLDER-S3-ENDPOINT   # 예: https://s3.ap-northeast-2.amazonaws.com
   bucket: PLACEHOLDER-BUCKET
   prefix: wafer
