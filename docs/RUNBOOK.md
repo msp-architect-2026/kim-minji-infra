@@ -22,14 +22,18 @@
 
 | # | 항목 | 현재 값 (placeholder) | 위치 | 확인 방법 |
 |---|---|---|---|---|
-| C1 | k3s(Kubernetes) 버전 | `1.31.0` | `scripts/validate.sh` `K8S_VERSION` (helm, infra) | `kubectl version` |
+| C1 | k3s(Kubernetes) 버전 | `1.31.0` | `scripts/validate.sh` `K8S_VERSION` (helm, infra) | `kubectl version`. **Traefik 차트 42.x는 1.30 이상 필요**, Longhorn 1.12는 1.25 이상 |
 | C2 | ai-serving dev 메모리로 모델 로딩 가능 여부 | requests 250m/512Mi, limits 1000m/1Gi, HPA 1~2 | `kim-minji-helm/ai-serving/values-dev.yaml` | dev 배포 후 OOMKilled·readiness 실패 여부, `kubectl top pod -n ai-serving`. 부족하면 limit을 올리고 8장 표 갱신 |
 | C3 | GitLab 이전 후 호스트 IP | repoURL은 `http://gitlab.local:8929/...` 유지, IP만 변경 | CoreDNS custom 설정(`gitlab.local` hosts, 현재 `192.168.0.157`) — 레포 밖 ConfigMap | 이전한 GitLab의 IP. 맥 호스트 컨테이너면 UTM 브리지에서 보이는 맥 IP |
 | C5 | 기존 ArgoCD Application 이름 | ApplicationSet이 차트명(`frontend`, `backend`, `ai-serving`, `mysql`, `minio`, `ingress`, `network-policy`, `coredns`, `node-local-dns`, `monitoring`, `loki`)으로 생성 | `argocd/apps/*.yaml` | `kubectl -n gitops get applications`. 이름이 다르면 4.1 절차에서 non-cascade 삭제. **앱 차트는 이름이 곧 Helm 릴리스명**이라, 다르면 리소스 이름·StatefulSet PVC가 새로 생겨 빈 DB/버킷으로 뜬다 → 해당 원소에 기존 릴리스명을 `releaseName`으로 지정하거나 2장 백업으로 데이터 이전 |
 | C6 | ArgoCD 버전 | `templatePatch`(v2.10+), `ignoreMissingValueFiles` 사용 | `argocd/apps/platform.yaml` | `argocd version` 또는 argocd-server 이미지 태그 |
 | C7 | VM 메모리 배분 | 8장 가정: cp1 8GB / w1 7GB / ai2 7GB | UTM 설정 | 8장 표와 `kubectl describe node` Allocatable |
-| C8 | 레포 밖 구성요소 실제 사용량 | 8장 추정치 | — | `kubectl top pod -A` (k3s 내장 coredns·metrics-server·local-path, ArgoCD, sealed-secrets, ingress-nginx) |
-| C4 | Sealed Secrets controller 이름·네임스페이스 | `kube-system/sealed-secrets-controller` (가정) | `kim-minji-helm/README.md` kubeseal 명령 | `kubectl get deploy -A \| grep sealed` |
+| C4 | 기존 Sealed Secrets controller 설치 방식·이름·네임스페이스 | `kube-system/sealed-secrets-controller` (가정) | `sealed-secrets/values.yaml` `fullnameOverride`, 릴리스 네임스페이스(`argocd/apps/platform.yaml`) | `kubectl get deploy -A \| grep sealed`, `helm list -A`. 다르면 값을 맞춘다 (키 Secret이 같은 네임스페이스에 있어야 재사용됨) |
+| C8 | 레포 밖 구성요소 실제 사용량 | 8장 추정치 | — | `kubectl top pod -A` (ArgoCD, k3s 내장 coredns·metrics-server·local-path, Longhorn instance-manager·CSI) |
+| C9 | MetalLB IP 대역 / Traefik LB IP | `PLACEHOLDER-IP-RANGE` | `metallb/values.yaml` `ipAddressPool.addresses` | 노드 IP(.57/.157/.240)·공유기 DHCP 범위와 겹치지 않는 대역(예: `192.168.0.200-192.168.0.209`). 할당된 Traefik IP는 `kubectl -n traefik get svc traefik` |
+| C10 | 기존 ingress-nginx 설치 방식·네임스페이스 | NetworkPolicy가 참조하던 `ingress-nginx` 네임스페이스 | — | `helm list -A \| grep ingress`, `kubectl get ns`. 4.4 전환 시 삭제 대상 |
+| C11 | k3s 내장 traefik·servicelb 사용 여부 | 둘 다 꺼야 함 | cp1 `/etc/rancher/k3s/config.yaml` | `kubectl -n kube-system get helmchart`, `kubectl -n kube-system get ds \| grep svclb` |
+| C12 | VM vCPU 수 | Longhorn instance-manager CPU 예약(dev 5% / full 8%) 계산에 필요 | UTM 설정 | `kubectl describe node` Capacity |
 
 ## 2. 사전 백업
 
@@ -39,6 +43,11 @@
 - MinIO: `mc mirror`로 `wafer-images`, `wafer-model` 버킷을 클러스터 밖으로 복사
 - 현재 Secret 값 확인 (SealedSecret 재암호화에 필요): `mysql-secret`, `minio-secret`, `backend-secret`
 - k3s 상태: cp1의 `/var/lib/rancher/k3s/server` (현재 단일 server라 datastore가 SQLite일 가능성이 높다 — `ls /var/lib/rancher/k3s/server/db`로 확인)
+- **Sealed Secrets 암호화 키** (잃으면 모든 SealedSecret을 다시 암호화해야 한다):
+  ```bash
+  kubectl -n kube-system get secret -l sealedsecrets.bitnami.com/sealed-secrets-key -o yaml > sealed-secrets-key-backup.yaml
+  ```
+  이 파일은 평문 개인키다. Git에 올리지 말고 맥 호스트의 안전한 위치에 보관한다.
 
 ## 3. k3s 구성: 기존 클러스터 유지 vs 새로 설치
 
@@ -49,15 +58,15 @@
 | A. 기존 클러스터 유지 (권장) | 플랫폼 구성요소를 ArgoCD로 추가하고, 스토리지만 local-path → Longhorn으로 데이터 이전 | 다운타임 최소, 기존 SealedSecret 키 유지 | 설정 잔재(수동 설치한 ingress 등) 정리 필요 |
 | B. 새로 설치 | 3대 모두 k3s 재설치 → 처음부터 GitOps로 구성 | 깨끗한 상태, 설치 순서 검증 가능 | Sealed Secrets 키가 바뀌어 **모든 SealedSecret 재암호화** 필요(기존 키를 백업해 복원하면 회피 가능), 데이터 복원 필요 |
 
-세부 절차: 작성 예정 (항목 2, 10).
+A안 절차: 4.5 노드 준비 → 4.1 ApplicationSet 전환 → 4.4 Traefik 전환 → (항목 4) 스토리지 이전. B안 세부 절차는 항목 10에서 정리한다.
 
 ## 4. 설치·배포 순서
 
-작성 예정 (항목 2, 7). 큰 순서:
+큰 순서 (sync wave로 자동화하는 부분은 항목 7에서 보완):
 
-1. k3s 설정 (내장 traefik/servicelb 사용 여부, ai2 taint — 4.2)
-2. Sealed Secrets controller → MetalLB → cert-manager → Longhorn → ingress-nginx
-3. ArgoCD + ApplicationSet (클러스터 Secret에 `env` 라벨, 기본 dev)
+1. 노드 준비·k3s 설정 (4.5) — 내장 traefik·servicelb 비활성화, Longhorn 선행 패키지, 디스크 노드 라벨, ai2 taint(4.2)
+2. ArgoCD + ApplicationSet 전환 (4.1)
+3. 플랫폼: sealed-secrets(기존 키 인계) → metallb(C9 확정 후) → cert-manager → longhorn → traefik(4.4 ingress-nginx 전환)
 4. 인프라 앱 (DNS → NetworkPolicy → monitoring/loki → backup)
 5. 애플리케이션 (mysql/minio → backend → ai-serving → frontend)
 
@@ -103,7 +112,57 @@ kubectl uncordon k3s-w1 k3s-ai2
 - 라벨을 바꾸면 ApplicationSet이 모든 Application의 valueFiles를 `values-<env>.yaml`로 바꾸고 auto-sync한다.
 - **full → dev 순서 주의**: 노드를 먼저 끄면 full의 DoNotSchedule·replica 2 Pod가 Pending/축출된다. 라벨을 먼저 바꾸고 sync 완료 후 노드를 끈다.
 - **drain 없이 끄지 않는다**: 꺼진 노드의 Deployment Pod는 약 5분 뒤에야 재생성되고, StatefulSet Pod(loki, prometheus, 레포 밖의 argocd-application-controller 등)는 Terminating에 걸려 재생성되지 않는다. ArgoCD 컨트롤러가 걸리면 아무것도 동기화되지 않는다.
-- Git의 `argocd/bootstrap/cluster-in-cluster.yaml`은 초기값(dev)이다. 라벨은 클러스터에서만 바꾼다.
+- Git의 `argocd/bootstrap/cluster-in-cluster.yaml`에는 `env` 라벨이 없다(= dev). 라벨은 클러스터에서만 바꾼다.
+- **Longhorn 볼륨 복제 수**: StorageClass 복제 수(dev 1 / full 2)는 새 볼륨에만 적용된다. 기존 볼륨은 직접 바꾼다.
+  ```bash
+  # full로 올린 뒤: 2 / dev로 내리기 전: 1
+  for v in $(kubectl -n longhorn-system get volumes.longhorn.io -o name); do
+    kubectl -n longhorn-system patch $v --type merge -p '{"spec":{"numberOfReplicas":2}}'
+  done
+  ```
+  full → dev는 복제 수를 1로 내리기 **전에** 볼륨이 cp1에 복제본을 갖고 있는지 확인한다 (`dataLocality: best-effort`라 Pod가 cp1로 옮겨 오면 cp1에 복제본이 생긴다). Longhorn UI 또는 `kubectl -n longhorn-system get replicas.longhorn.io -o wide`.
+
+### 4.4 ingress-nginx → Traefik 전환 (항목 2)
+
+ingress-nginx는 2026년 3월 유지보수가 끝나 Traefik으로 교체했다. NodePort 32088을 Traefik이 이어받으므로 **잠깐(수 분) 접속이 끊긴다.**
+
+1. k3s 내장 traefik이 꺼져 있는지 확인 (C11, 4.5). 켜져 있으면 IngressClass `traefik` 이름이 겹친다
+2. 기존 ingress-nginx 제거 (C10): `helm -n ingress-nginx uninstall <릴리스>` 또는 설치 매니페스트로 삭제 → NodePort 32088 해제
+3. `traefik` Application sync → `kubectl -n traefik get svc traefik`에서 NodePort 32088·LB IP 확인
+4. `ingress`, `monitoring`(Grafana), `network-policy` Application sync → Ingress의 class가 `traefik`인지 확인: `kubectl get ingress -A`
+5. 맥에서 `curl -H 'Host: app.wafer.local' http://192.168.0.57:32088/` 응답 확인. LB IP를 쓰려면 `/etc/hosts`의 `*.wafer.local`을 C9의 Traefik IP로 바꾸고 포트 없이 접속
+6. 기존 ingress-nginx의 `nginx.ingress.kubernetes.io/rewrite-target: /`는 경로 `/`에 대해 실질적으로 동작이 없어 제거했다. 경로 재작성이 필요한 화면이 있으면 Traefik Middleware로 추가
+
+### 4.5 노드 준비·k3s 설정 (항목 2)
+
+```bash
+# cp1: 내장 traefik·servicelb 비활성화 (MetalLB·ArgoCD Traefik과 충돌)
+sudo tee -a /etc/rancher/k3s/config.yaml <<'CFG'
+disable:
+  - traefik
+  - servicelb
+CFG
+sudo systemctl restart k3s
+
+# 모든 노드: Longhorn 선행 패키지 (Ubuntu/Debian 기준)
+sudo apt-get install -y open-iscsi nfs-common
+sudo systemctl enable --now iscsid
+
+# Longhorn 디스크를 만들 노드(cp1, w1)에만 라벨. ai2에는 붙이지 않는다 → 복제본이 ai2에 생기지 않음
+kubectl label node k3s-cp1 k3s-w1 node.longhorn.io/create-default-disk=true
+```
+
+- 기존 `/etc/rancher/k3s/config.yaml`에 `disable:` 항목이 이미 있으면 목록에 합친다.
+- servicelb를 끄면 기존 `svclb-*` DaemonSet이 사라진다. LoadBalancer 타입 Service는 MetalLB가 IP를 줄 때까지 `<pending>`이다.
+
+### 4.6 사설 CA 신뢰 등록 (맥)
+
+cert-manager가 만든 루트 CA(`cert-manager/wafer-root-ca`)를 맥에 신뢰 등록하면 이후 `*.wafer.local` TLS(항목 3) 경고가 사라진다.
+
+```bash
+kubectl -n cert-manager get secret wafer-root-ca -o jsonpath='{.data.ca\.crt}' | base64 -d > wafer-root-ca.crt
+sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain wafer-root-ca.crt
+```
 
 ## 5. 채워야 할 시크릿
 
@@ -125,6 +184,11 @@ kubectl uncordon k3s-w1 k3s-ai2
 - [ ] coredns replica 1 Running
 - [ ] ai-serving이 cp1에 Running (ai2 선호지만 ai2가 꺼져 있으므로), OOMKilled 없음 (C2)
 - [ ] Prometheus retention 2d: `kubectl -n monitoring get prometheus -o jsonpath='{.items[0].spec.retention}'`
+- [ ] Traefik 1개 Running, `curl -H 'Host: app.wafer.local' http://<cp1 IP>:32088/` 200
+- [ ] MetalLB: `kubectl -n traefik get svc traefik`에 EXTERNAL-IP 할당 (C9 대역)
+- [ ] cert-manager: `kubectl get clusterissuer wafer-ca` Ready=True
+- [ ] Longhorn: `kubectl -n longhorn-system get nodes.longhorn.io` cp1 Ready·Schedulable, 볼륨이 있으면 복제본이 cp1에 있음
+- [ ] Sealed Secrets: 기존 SealedSecret(backend-secret 등) `kubectl get sealedsecret -A` 모두 Synced (키 인계 확인)
 
 ### 6.2 full, 3대 모두 켠 상태
 
@@ -132,6 +196,8 @@ kubectl uncordon k3s-w1 k3s-ai2
 - [ ] coredns 2개가 서로 다른 노드: `kubectl -n kube-system get pod -l k8s-app=kube-dns -o wide`
 - [ ] frontend, backend 각 2개 Running
 - [ ] ai-serving이 k3s-ai2에만 배치: `kubectl -n ai-serving get pod -o wide`
+- [ ] Traefik 2개가 서로 다른 노드, PDB 존재: `kubectl -n traefik get pod -o wide`, `kubectl -n traefik get pdb`
+- [ ] Longhorn 볼륨 복제본 2개가 cp1·w1에 분산 (4.3 복제 수 변경 후), ai2에는 복제본 없음
 
 ## 7. 롤백
 
@@ -140,7 +206,10 @@ kubectl uncordon k3s-w1 k3s-ai2
   2. `kubectl -n gitops delete applicationset platform apps` (`preserveResourcesOnDeletion: true`라 Application이 지워져도 리소스는 유지)
   3. 기존 Application 매니페스트(Git 이력의 `*/application.yaml`) 재적용
 
-작성 예정 (항목 1~9). 원칙:
+- Traefik 전환 롤백: `traefik` Application 삭제(ApplicationSet에서 원소 제거 후 sync) → 기존 ingress-nginx 재설치 → `ingress`/`network-policy`/`monitoring`의 class·네임스페이스 값을 `nginx`/`ingress-nginx`로 되돌려 sync
+- k3s 설정 롤백: `/etc/rancher/k3s/config.yaml`의 `disable` 항목 제거 후 `systemctl restart k3s`
+
+작성 예정 (항목 3~9). 원칙:
 
 - 코드 롤백은 Git revert → ArgoCD sync
 - 프로파일 전환 롤백은 클러스터 Secret의 `env` 라벨을 이전 값으로 되돌린다
@@ -157,18 +226,21 @@ scripts/resource-summary.py --nodes 1 /tmp/r-infra/dev /tmp/r-helm/dev
 scripts/resource-summary.py --nodes 3 /tmp/r-infra/full /tmp/r-helm/full
 ```
 
-### 8.1 요약 (항목 1 기준, 2026-10-26)
+### 8.1 요약 (항목 2 기준, 2026-10-26)
 
 | 구분 | dev (cp1 1대) CPU | dev 메모리 | full (3대) CPU | full 메모리 |
 |---|---|---|---|---|
-| 레포 워크로드 requests | 1415m | 2.66Gi | 2530m | 4.66Gi |
-| 레포 워크로드 (HPA 최대치) | 1665m | 3.16Gi | 4030m | 7.66Gi |
-| 레포 밖 구성요소 (추정, C8) | ~0.3 core | ~1.1Gi | ~0.4 core | ~1.2Gi |
+| 레포 워크로드 requests | 1635m | 3.25Gi | 2950m | 5.81Gi |
+| 레포 워크로드 (HPA 최대치) | 1885m | 3.75Gi | 4450m | 8.81Gi |
+| 레포 밖·동적 생성 구성요소 (추정, C8) | ~0.4 core | ~1.5Gi | ~0.9 core | ~2.2Gi |
 | k3s 프로세스·OS (추정) | — | ~1.0Gi | — | ~2.2Gi (server 1.0 + agent 0.6×2) |
-| **합계 (HPA 최소)** | **~1.7 core** | **~4.8Gi** | **~2.9 core** | **~8.1Gi** |
-| **합계 (HPA 최대)** | **~2.0 core** | **~5.3Gi** | **~4.4 core** | **~11.1Gi** |
+| **합계 (HPA 최소)** | **~2.0 core** | **~5.8Gi** | **~3.9 core** | **~10.2Gi** |
+| **합계 (HPA 최대)** | **~2.3 core** | **~6.3Gi** | **~5.4 core** | **~13.2Gi** |
 
-레포 밖 구성요소 추정(실제 사용량 기준, requests 아님): ArgoCD ~800Mi, ingress-nginx ~100Mi(100m), sealed-secrets ~50Mi, k3s 내장 coredns 70Mi(100m)·metrics-server 70Mi(100m)·local-path 20Mi. full은 coredns 2개분.
+레포 밖·동적 생성 구성요소 추정(실제 사용량 기준):
+- ArgoCD ~800Mi, k3s 내장 coredns 70Mi(100m)·metrics-server 70Mi(100m)·local-path 20Mi (full은 coredns 2개분)
+- Longhorn이 직접 만드는 Pod(렌더링 결과에 없음): instance-manager(디스크 노드마다, CPU는 노드 allocatable의 dev 5% / full 8% 예약), CSI plugin DaemonSet, CSI controller(attacher·provisioner·resizer·snapshotter, dev 각 1 / full 각 2), engine-image → dev ~0.5Gi, full ~1.2Gi
+- ingress-nginx·sealed-secrets는 항목 2부터 레포 워크로드(traefik, sealed-secrets)로 계산
 
 ### 8.2 32GB 안에서의 배분 (가정, C7)
 
@@ -179,11 +251,13 @@ scripts/resource-summary.py --nodes 3 /tmp/r-infra/full /tmp/r-helm/full
 | **VM 3대에 쓸 수 있는 양** | **~22GB** |
 | 제안 배분 | cp1 8GB / w1 7GB / ai2 7GB |
 
-- dev: 모든 Pod가 cp1에 몰린다. ~5.3Gi(HPA 최대) < cp1 8GB → 여유 ~2.7GB.
-- full: 합계 ~8.1Gi(HPA 최소) / ~11.1Gi(최대) < 22GB.
+- dev: 모든 Pod가 cp1에 몰린다. ~6.3Gi(HPA 최대) < cp1 8GB → 여유 ~1.7GB. 이후 항목(Alertmanager 등)이 더해지면 cp1을 9GB로 늘리고 ai2를 6GB로 줄이는 안을 검토한다.
+- full: 합계 ~10.2Gi(HPA 최소) / ~13.2Gi(최대) < 22GB.
 - **주의 (full)**: ai-serving은 ai2 고정이라 HPA 4개면 ai2에 requests 4Gi, **limits 12Gi(3Gi×4)** 가 몰린다. ai2 7GB에서는 limits 기준 과다 할당이다. 항목 8(AI 서빙)에서 maxReplicas 또는 limit 조정을 검토한다.
 
 ### 8.3 워크로드별 상세
+
+`(미설정 포함)`은 requests가 없는 컨테이너(sidecar 등)가 있다는 뜻이다. coredns는 k3s가 관리해 렌더링 결과에 requests가 없다.
 
 dev (`--nodes 1`):
 
@@ -191,20 +265,30 @@ dev (`--nodes 1`):
 |---|---|---|---|---|---|---|
 | ai-serving | Deployment | ai-serving-ai-serving | 1 (2) | 250m · 512Mi | 250m | 512Mi |
 | backend | Deployment | backend-backend | 1 | 250m · 512Mi | 250m | 512Mi |
+| cert-manager | Deployment | cert-manager | 1 | 25m · 64Mi | 25m | 64Mi |
+| cert-manager | Deployment | cert-manager-cainjector | 1 | 10m · 64Mi | 10m | 64Mi |
+| cert-manager | Deployment | cert-manager-webhook | 1 | 10m · 32Mi | 10m | 32Mi |
 | coredns | Deployment | coredns | 1 | 0m · 0Mi (k3s 관리, 실제 100m · 70Mi) | 0m | 0Mi |
 | frontend | Deployment | frontend-frontend | 1 | 100m · 128Mi | 100m | 128Mi |
 | loki | DaemonSet | loki-promtail | 1 | 25m · 64Mi | 25m | 64Mi |
 | loki | StatefulSet | loki | 1 | 50m · 128Mi | 50m | 128Mi |
+| longhorn | DaemonSet | longhorn-manager | 1 | 50m · 192Mi (미설정 포함) | 50m | 192Mi |
+| longhorn | Deployment | longhorn-driver-deployer | 1 | 0m · 0Mi (미설정 포함) | 0m | 0Mi |
+| longhorn | Deployment | longhorn-ui | 1 | 0m · 0Mi (미설정 포함) | 0m | 0Mi |
+| metallb | DaemonSet | metallb-speaker | 1 | 25m · 64Mi | 25m | 64Mi |
+| metallb | Deployment | metallb-controller | 1 | 25m · 64Mi | 25m | 64Mi |
 | minio | StatefulSet | minio-minio | 1 | 200m · 256Mi | 200m | 256Mi |
 | monitoring | DaemonSet | monitoring-prometheus-node-exporter | 1 | 20m · 32Mi | 20m | 32Mi |
-| monitoring | Deployment | monitoring-grafana | 1 | 50m · 128Mi (sidecar 미설정) | 50m | 128Mi |
+| monitoring | Deployment | monitoring-grafana | 1 | 50m · 128Mi (미설정 포함) | 50m | 128Mi |
 | monitoring | Deployment | monitoring-kube-prometheus-operator | 1 | 50m · 64Mi | 50m | 64Mi |
 | monitoring | Deployment | monitoring-kube-state-metrics | 1 | 20m · 64Mi | 20m | 64Mi |
 | monitoring | Prometheus | monitoring-kube-prometheus-prometheus | 1 | 100m · 256Mi | 100m | 256Mi |
 | mysql | StatefulSet | mysql-mysql | 1 | 200m · 512Mi | 200m | 512Mi |
 | node-local-dns | DaemonSet | node-local-dns | 1 | 100m · 64Mi | 100m | 64Mi |
-| **합계** | | | | | **1415m** | **2.66Gi** |
-| **HPA 최대치 기준** | | | | | **1665m** | **3.16Gi** |
+| sealed-secrets | Deployment | sealed-secrets-controller | 1 | 25m · 64Mi | 25m | 64Mi |
+| traefik | Deployment | traefik | 1 | 50m · 64Mi | 50m | 64Mi |
+| **합계** | | | | | **1635m** | **3.25Gi** |
+| **HPA 최대치 기준** | | | | | **1885m** | **3.75Gi** |
 
 full (`--nodes 3`):
 
@@ -212,19 +296,29 @@ full (`--nodes 3`):
 |---|---|---|---|---|---|---|
 | ai-serving | Deployment | ai-serving-ai-serving | 1 (4) | 500m · 1024Mi | 500m | 1024Mi |
 | backend | Deployment | backend-backend | 2 | 250m · 512Mi | 500m | 1024Mi |
+| cert-manager | Deployment | cert-manager | 1 | 25m · 64Mi | 25m | 64Mi |
+| cert-manager | Deployment | cert-manager-cainjector | 1 | 10m · 64Mi | 10m | 64Mi |
+| cert-manager | Deployment | cert-manager-webhook | 1 | 10m · 32Mi | 10m | 32Mi |
 | coredns | Deployment | coredns | 2 | 0m · 0Mi (k3s 관리, 실제 100m · 70Mi) | 0m | 0Mi |
 | frontend | Deployment | frontend-frontend | 2 | 100m · 128Mi | 200m | 256Mi |
 | loki | DaemonSet | loki-promtail | 3 | 50m · 128Mi | 150m | 384Mi |
 | loki | StatefulSet | loki | 1 | 100m · 256Mi | 100m | 256Mi |
+| longhorn | DaemonSet | longhorn-manager | 3 | 50m · 192Mi (미설정 포함) | 150m | 576Mi |
+| longhorn | Deployment | longhorn-driver-deployer | 1 | 0m · 0Mi (미설정 포함) | 0m | 0Mi |
+| longhorn | Deployment | longhorn-ui | 1 | 0m · 0Mi (미설정 포함) | 0m | 0Mi |
+| metallb | DaemonSet | metallb-speaker | 3 | 25m · 64Mi | 75m | 192Mi |
+| metallb | Deployment | metallb-controller | 1 | 25m · 64Mi | 25m | 64Mi |
 | minio | StatefulSet | minio-minio | 1 | 200m · 256Mi | 200m | 256Mi |
 | monitoring | DaemonSet | monitoring-prometheus-node-exporter | 3 | 20m · 32Mi | 60m | 96Mi |
-| monitoring | Deployment | monitoring-grafana | 1 | 50m · 128Mi (sidecar 미설정) | 50m | 128Mi |
+| monitoring | Deployment | monitoring-grafana | 1 | 50m · 128Mi (미설정 포함) | 50m | 128Mi |
 | monitoring | Deployment | monitoring-kube-prometheus-operator | 1 | 50m · 64Mi | 50m | 64Mi |
 | monitoring | Deployment | monitoring-kube-state-metrics | 1 | 20m · 64Mi | 20m | 64Mi |
 | monitoring | Prometheus | monitoring-kube-prometheus-prometheus | 1 | 200m · 512Mi | 200m | 512Mi |
 | mysql | StatefulSet | mysql-mysql | 1 | 200m · 512Mi | 200m | 512Mi |
 | node-local-dns | DaemonSet | node-local-dns | 3 | 100m · 64Mi | 300m | 192Mi |
-| **합계** | | | | | **2530m** | **4.66Gi** |
-| **HPA 최대치 기준** | | | | | **4030m** | **7.66Gi** |
+| sealed-secrets | Deployment | sealed-secrets-controller | 1 | 25m · 64Mi | 25m | 64Mi |
+| traefik | Deployment | traefik | 2 | 50m · 64Mi | 100m | 128Mi |
+| **합계** | | | | | **2950m** | **5.81Gi** |
+| **HPA 최대치 기준** | | | | | **4450m** | **8.81Gi** |
 
-> 이후 항목(Longhorn, MetalLB, cert-manager, Alertmanager, KEDA, Tempo/OTel 등)이 추가될 때마다 이 표를 갱신한다.
+> 이후 항목(Alertmanager, KEDA, Tempo/OTel 등)이 추가될 때마다 이 표를 갱신한다.
