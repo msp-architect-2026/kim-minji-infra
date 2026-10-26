@@ -17,8 +17,4 @@ ingress:
     serviceName: ai-serving-ai-serving
     servicePort: 8000
     serviceNamespace: ai-serving
-  grafana:
-    host: grafana.wafer.local
-    serviceName: monitoring-grafana
-    servicePort: 80
-    serviceNamespace: monitoring  
+# Grafana Ingress는 monitoring 차트(kube-prometheus-stack grafana.ingress)가 만든다
