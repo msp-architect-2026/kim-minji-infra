@@ -36,7 +36,7 @@
 | C13 | 외부 접속 방식 (HTTPS) | LB IP 443 기준: Traefik 리다이렉트 `to: websecure`(→:443), frontend `https://api.wafer.local`, `https://grafana.wafer.local` | `traefik/values.yaml` `ports.web.http.redirections.entryPoint.to`, GitLab frontend CI 변수 `VITE_API_URL`·`VITE_GRAFANA_URL`(5.1), `kim-minji-frontend/.env` | C9의 MetalLB IP가 맥에서 접속되면 그대로. **NodePort로만 접속 가능하면** 4.7의 NodePort 리다이렉트 설정으로 바꾸고, frontend URL·Grafana `root_url`을 `https://*.wafer.local:32443`으로 바꾼다 (backend CORS는 두 경우 모두 허용) |
 | C14 | 앱 네임스페이스의 다른 Pod·외부 통신 | default-deny 대상: application, ai-serving, storage | `network-policy/templates/egress.yaml` | `kubectl get pod -n application -n ai-serving -n storage`로 frontend·backend·ai-serving·mysql·minio·backup Job 외의 Pod가 있는지, backend·ai-serving이 클러스터 밖(외부 API 등)을 호출하는지 확인. 있으면 egress 규칙 추가 |
 | C15 | GitLab Runner 인터넷 접근 (Trivy) | `aquasec/trivy:0.75.0` 이미지 pull, 취약점 DB(ghcr.io) 다운로드 | 앱 레포 `.gitlab-ci.yml` `image_scan` | Runner에서 `ghcr.io`, Docker Hub 접근 가능 여부. 막혀 있으면 job이 실패(allow_failure라 배포는 진행) |
-| C16 | 외부 S3 호환 백업 저장소 | `https://PLACEHOLDER-S3-ENDPOINT`, `PLACEHOLDER-BUCKET`, Longhorn `backupTarget: ~` | `backup/values.yaml` `external.*`, `longhorn/values.yaml` `longhorn.defaultBackupStore.backupTarget`·`recurringJobs.backup.enabled`, `network-policy/values.yaml` `backupExternalEgress.ports` | AWS S3·B2·R2·NAS·맥 호스트 MinIO 중 결정. **같은 맥의 디스크면 맥 고장 시 함께 사라진다**는 점을 고려. 엔드포인트 포트가 443·9000이 아니면 egress 포트 추가. Longhorn 형식: `s3://<bucket>@<region>/longhorn` |
+| C16 | 외부 S3 호환 백업 저장소 | `external.enabled: false`(클러스터 내 백업만), `https://PLACEHOLDER-S3-ENDPOINT`, `PLACEHOLDER-BUCKET`, Longhorn `backupTarget: ~` | `backup/values.yaml` `external.*`(확정 후 `enabled: true`), `longhorn/values.yaml` `longhorn.defaultBackupStore.backupTarget`·`recurringJobs.backup.enabled`, `network-policy/values.yaml` `backupExternalEgress.ports` | AWS S3·B2·R2·NAS·맥 호스트 MinIO 중 결정. **같은 맥의 디스크면 맥 고장 시 함께 사라진다**는 점을 고려. 엔드포인트 포트가 443·9000이 아니면 egress 포트 추가. Longhorn 형식: `s3://<bucket>@<region>/longhorn` |
 | C17 | k3s 데이터스토어 종류 | SQLite 가정 (server 1대) | RUNBOOK 4.10 | `ls /var/lib/rancher/k3s/server/db` — `state.db`면 SQLite, `etcd/`면 embedded etcd(`k3s etcd-snapshot` 사용) |
 | C12 | VM vCPU 수 | dev는 cp1 1대에 CPU requests ~2.0~2.3 core + instance-manager 예약(5%)이 몰린다 → **cp1 3 vCPU 이상** 권장. full instance-manager는 노드마다 8% | UTM 설정 | `kubectl describe node` Capacity·Allocated resources |
 
@@ -47,7 +47,7 @@
 ```bash
 mkdir -p ~/wafer-backup && cd ~/wafer-backup
 # MySQL 전체 덤프
-kubectl -n storage exec mysql-mysql-0 -- sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysqldump -uroot --single-transaction --databases "$MYSQL_DATABASE"' | gzip > mysql-$(date +%F).sql.gz
+kubectl -n storage exec mysql-mysql-0 -- sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysqldump -uroot --single-transaction --set-gtid-purged=OFF --databases "$MYSQL_DATABASE"' | gzip > mysql-$(date +%F).sql.gz
 # MinIO 버킷 (포트포워딩 + mc)
 kubectl -n storage port-forward svc/minio-minio 9000:9000 &
 mc alias set wafer http://127.0.0.1:9000 "$(kubectl -n storage get secret minio-secret -o jsonpath='{.data.accessKey}' | base64 -d)" "$(kubectl -n storage get secret minio-secret -o jsonpath='{.data.secretKey}' | base64 -d)"
@@ -84,9 +84,9 @@ A안 절차: 4.5 노드 준비 → C9 확정·커밋 → 4.4 ingress-nginx 제�
 3. ingress-nginx 제거 (4.4) — **여기서부터 외부 접속 중단**
 4. ArgoCD ApplicationSet 전환 (4.1) — 플랫폼(sealed-secrets, metallb, cert-manager, longhorn, traefik)과 기존 인프라·앱이 한 번에 생성된다. Traefik이 Ready가 되면 **접속 복구**
 5. 스토리지 이전 (4.8) — mysql·minio를 Longhorn으로. helm 레포의 `storageClassName: longhorn` 변경이 머지된 상태에서 mysql·minio Application은 StatefulSet 불변 필드 때문에 sync가 실패한 채 기다린다(기존 Pod는 계속 동작) → 4.8 절차로 옮긴다
-6. 데이터스토어 백업 등록 (4.10), 외부 백업 확인 (6.1)
-4. 인프라 앱 (DNS → NetworkPolicy → monitoring/loki → backup)
-5. 애플리케이션 (mysql/minio → backend → ai-serving → frontend)
+6. 데이터스토어 백업 등록 (4.10), 외부 백업(C16 확정 후 `external.enabled: true`) 확인 (6.1)
+
+4단계에서 함께 생성되는 앱 사이의 순서(DNS → NetworkPolicy → monitoring/loki → backup → mysql/minio → backend → ai-serving → frontend)는 항목 7의 sync wave로 정리한다.
 
 ### 4.1 ApplicationSet 전환 (항목 1)
 
@@ -95,7 +95,7 @@ A안 절차: 4.5 노드 준비 → C9 확정·커밋 → 4.4 ingress-nginx 제�
 **선행 조건**: 4.5 완료, C9 커밋 완료, 4.4(ingress-nginx 제거) 완료. ApplicationSet이 traefik·ingress·network-policy를 동시에 만들기 때문에, ingress-nginx가 남아 있으면 NodePort 32088 충돌로 traefik sync가 실패하고 Ingress·NetworkPolicy만 traefik 기준으로 바뀌어 접속이 끊긴다.
 
 1. 기존 Application 목록 확인 (C5): `kubectl -n gitops get applications`
-2. 기존 Application을 **리소스는 남기고** 삭제 (finalizer 제거 후 삭제 = non-cascade)
+2. 기존 Application을 **리소스는 남기고** 삭제 (finalizer 제거 후 삭제 = non-cascade). 대상에 기존 `backup` Application도 포함한다 (platform ApplicationSet의 `backup` 차트가 같은 이름의 CronJob을 이어받는다)
    ```bash
    for app in <기존 앱 이름들>; do
      kubectl -n gitops patch application $app --type merge -p '{"metadata":{"finalizers":null}}'
@@ -106,7 +106,6 @@ A안 절차: 4.5 노드 준비 → C9 확정·커밋 → 4.4 ingress-nginx 제�
 4. 루트 앱 적용: `kubectl apply -f argocd/bootstrap/root.yaml` → `root` → `platform`, `apps` ApplicationSet → 차트별 Application 생성
 5. 확인: `kubectl -n gitops get applicationsets`, 모든 Application `Synced/Healthy`. 첫 설치 때 webhook CA 주입 지연으로 cert-manager·metallb가 한 번 실패할 수 있으나 sync `retry`(최대 5회)로 다시 시도한다. 계속 실패하면 `argocd app sync <앱>`
 6. 접속 확인 (4.4의 5단계)
-   - (항목 4) 기존 `backup` Application도 1~2단계 대상이다 (non-cascade 삭제 → platform ApplicationSet의 `backup` 차트가 같은 이름의 CronJob을 이어받는다)
 7. (항목 4부터) `backup`은 platform ApplicationSet의 Helm 차트로 관리한다. `backup/argocd-application.yaml`은 삭제됐다
 
 ### 4.2 k3s-ai2 taint
@@ -244,18 +243,25 @@ StatefulSet의 `volumeClaimTemplates`는 바꿀 수 없어 **삭제 후 재생�
 
 ### 4.9 MySQL 수동 failover (full 프로파일)
 
-primary(`mysql-mysql-0`)가 복구되지 않을 때 replica를 승격한다.
+primary(`mysql-mysql-0`)가 복구되지 않을 때 replica를 승격한다. **Service 전환은 Git으로 한다** — kubectl로 Service를 바꾸면 다음 auto-sync(예: CI 이미지 태그 커밋)가 되돌리고, 복제 설정 Job이 다시 돌아 혼란이 생긴다. (Application 설정은 ApplicationSet이 관리하므로 auto-sync를 kubectl로 꺼도 되돌아간다.)
 
-```bash
-# 1) replica 승격 (bash에서)
-kubectl -n storage exec mysql-mysql-replica-0 -- sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql -uroot -e "STOP REPLICA; RESET REPLICA ALL; SET PERSIST super_read_only=OFF; SET PERSIST read_only=OFF;"'
-# 2) backend가 쓰는 Service(mysql-mysql)를 replica로 돌린다 (임시: 다음 Git 변경 sync 때 되돌아감)
-kubectl -n storage patch svc mysql-mysql --type merge -p '{"spec":{"selector":{"app.kubernetes.io/name":"mysql-replica","app.kubernetes.io/instance":"mysql"}}}'
-kubectl -n application rollout restart deploy backend-backend
-```
+1. replica 승격 (bash에서):
+   ```bash
+   kubectl -n storage exec mysql-mysql-replica-0 -- sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql -uroot -e "STOP REPLICA; RESET REPLICA ALL; SET PERSIST super_read_only=OFF; SET PERSIST read_only=OFF;"'
+   ```
+2. kim-minji-helm `mysql/values-full.yaml`에 `failover.promoted: true`를 커밋 → sync
+   - primary Service(`mysql-mysql`)가 replica Pod를 가리킨다 (backend 설정 변경 없음)
+   - 복제 설정 Job이 만들어지지 않는다
+   - NetworkPolicy는 backend → mysql-replica 경로를 이미 허용한다
+3. `kubectl -n application rollout restart deploy backend-backend` (커넥션 풀 재연결)
 
-- 복구 후 되돌리기: 옛 primary PVC를 지우고(데이터는 replica가 최신) primary를 새로 띄운 뒤, replica를 donor로 clone하거나 최신 덤프로 복원 → Service selector 원복(`mysql` Application sync) → `mysql-mysql-replication-setup` Job이 다시 replica를 연결 (replica PVC도 지워 새로 clone)
 - 승격 전 마지막 GTID 위치 확인: `SHOW REPLICA STATUS\G`의 `Retrieved_Gtid_Set` / `Executed_Gtid_Set`
+- 승격된 replica에서는 설정 Job이 다시 돌아도 clone하지 않는다 (사용자 데이터가 있으면 Job이 멈추고 실패)
+- 원래 구성으로 되돌리기 (데이터는 승격된 replica가 최신):
+  1. 쓰기 중지(backend replica 0) → 승격된 서버에서 덤프 (2장 명령을 `mysql-mysql-replica-0`에 실행)
+  2. 옛 primary PVC(`data-mysql-mysql-0`) 삭제 → `failover.promoted: false` 커밋 → sync로 빈 primary 생성 → 덤프 복원
+  3. replica PVC(`data-mysql-mysql-replica-0`)와 StatefulSet Pod 삭제 → sync → 설정 Job이 새 primary에서 다시 clone
+  4. backend 재개
 
 ### 4.10 k3s 데이터스토어 백업 (C17)
 
@@ -272,8 +278,20 @@ scp cp1:/var/backups/k3s/state-*.db ~/wafer-backup/k3s/
 ```
 
 - 매일 돌리려면 cp1의 root crontab에 `.backup` 줄을 등록하고 7일 지난 파일은 `find /var/backups/k3s -mtime +7 -delete`
-- 복원: `sudo systemctl stop k3s` → `state.db`를 백업본으로 교체 → `sudo systemctl start k3s`
+- 복원: `sudo systemctl stop k3s` → 기존 `db/` 디렉터리를 통째로 다른 이름으로 보관 → 새 `db/`에 백업본을 `state.db`로 복사 (**`state.db-wal`, `state.db-shm`을 남기지 않는다** — WAL이 남으면 옛 내용이 복원본에 다시 적용될 수 있다. `.backup` 결과물은 그 자체로 완결됨) → `sudo systemctl start k3s`
 - embedded etcd라면(C17) `sudo k3s etcd-snapshot save` (S3로 바로 올리려면 `--etcd-s3 --etcd-s3-endpoint ... --etcd-s3-bucket ...`)
+
+### 4.11 백업 CronJob 덤프로 복원
+
+백업 이미지의 `mysqldump`는 MariaDB 클라이언트라, 버전에 따라 덤프 첫 줄에 `/*M!999999\- enable the sandbox mode */`가 들어간다. MySQL 8 클라이언트(`mysql-mysql-0` 안)는 이 줄에서 멈추므로 지우고 넣는다. 덤프에는 `CREATE DATABASE`가 없으므로 대상 DB를 지정한다.
+
+```bash
+# 맥에서: 외부 S3(또는 port-forward한 클러스터 MinIO)에서 받아 복원
+mc cat ext/<bucket>/wafer/mysql/backup_<시각>.sql.gz | gunzip | sed '1{/999999/d;}' \
+  | kubectl -n storage exec -i mysql-mysql-0 -- sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql -uroot "$MYSQL_DATABASE"'
+```
+
+- 주간 복원 검증 CronJob은 같은 MariaDB 클라이언트로 복원하므로, 이 MySQL 클라이언트 경로는 6.1에서 한 번 직접 확인한다.
 
 ## 5. 채워야 할 시크릿
 
@@ -285,11 +303,11 @@ scp cp1:/var/backups/k3s/state-*.db ~/wafer-backup/k3s/
 | `minio-secret` (`accessKey`, `secretKey`) | storage | `kim-minji-helm/minio/values.yaml` `sealedSecret.encryptedData` | **현재 클러스터 값 그대로** 암호화, 기존 Secret annotate (kim-minji-helm README) |
 | `grafana-admin` (`admin-user`, `admin-password`) | monitoring | `kim-minji-infra/monitoring/values.yaml` `grafanaAdmin.sealedSecret.encryptedData` | 새 비밀번호로 생성 (아래 5.2) |
 | `mysql-secret`의 `MYSQL_REPLICATION_PASSWORD` | storage | 위와 같은 위치에 키 추가 | full(replica)에서만 필요. 새 값 (kim-minji-helm README) |
-| `backup-s3` (`accessKey`, `secretKey`) | storage | `kim-minji-infra/backup/values.yaml` `external.sealedSecret.encryptedData` | 외부 S3 계정 (5.3). 비어 있으면 backup 앱 렌더링 실패 |
+| `backup-s3` (`accessKey`, `secretKey`) | storage | `kim-minji-infra/backup/values.yaml` `external.sealedSecret.encryptedData` | 외부 S3 계정 (5.3). `external.enabled: true`일 때만 필요 (기본 false → 클러스터 내 백업만). 켰는데 비어 있거나 엔드포인트가 placeholder면 렌더링 실패 |
 | `longhorn-backup-s3` (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_ENDPOINTS`) | longhorn-system | `kim-minji-infra/longhorn/values.yaml` `backupS3.sealedSecret.encryptedData` | 선택 (5.3). 비어 있으면 만들지 않음 → 스냅샷만 동작 |
 | 그 밖의 항목 | | | 작성 예정 (항목 6) |
 
-- 세 차트 모두 값이 비어 있으면 **렌더링이 실패**한다 (평문 배포 방지). ArgoCD 앱이 `ComparisonError`로 멈추고 기존 리소스는 그대로 남는다. 4.1 전에 모두 채워 커밋한다.
+- mysql·minio·grafana-admin은 값이 비어 있으면 **렌더링이 실패**한다 (평문 배포 방지). ArgoCD 앱이 `ComparisonError`로 멈추고 기존 리소스는 그대로 남는다. 4.1 전에 모두 채워 커밋한다.
 - 백업 CronJob은 `mysql-secret`, `minio-secret`을 그대로 참조하므로 별도 시크릿이 없다.
 
 ### 5.1 GitLab CI 변수 (frontend 프로젝트, 시크릿 아님)
@@ -331,7 +349,13 @@ printf '      AWS_ACCESS_KEY_ID: %s\n      AWS_SECRET_ACCESS_KEY: %s\n      AWS_
   "$(seal "$AK" longhorn-system longhorn-backup-s3)" "$(seal "$SK" longhorn-system longhorn-backup-s3)" "$(seal "$EP" longhorn-system longhorn-backup-s3)"
 ```
 
-그다음 `longhorn/values.yaml`의 `longhorn.defaultBackupStore.backupTarget`을 채우고 `recurringJobs.backup.enabled: true`로 커밋한다.
+그다음 커밋한다.
+
+- `backup/values.yaml`: `external.enabled: true`, `endpoint`, `bucket` (C16)
+- `longhorn/values.yaml`: `longhorn.defaultBackupStore.backupTarget`, `recurringJobs.backup.enabled: true`
+- Longhorn 설치 후에 backupTarget을 바꾸면 기본 설정 ConfigMap 변경이 반영되지 않을 수 있다. `kubectl -n longhorn-system get backuptargets.longhorn.io default -o yaml`의 `spec.backupTargetURL`이 비어 있으면 직접 맞춘다:
+  `kubectl -n longhorn-system patch backuptargets.longhorn.io default --type merge -p '{"spec":{"backupTargetURL":"s3://<bucket>@<region>/longhorn","credentialSecret":"longhorn-backup-s3"}}'`
+- 외부 S3의 MinIO 미러(`{prefix}/minio/`)는 지우지 않고 쌓인다 (`mc mirror --overwrite`, 삭제 반영 안 함). 용량이 걱정되면 버킷 수명주기 규칙을 둔다
 
 ## 6. 배포 후 확인 체크리스트
 
@@ -356,6 +380,7 @@ printf '      AWS_ACCESS_KEY_ID: %s\n      AWS_SECRET_ACCESS_KEY: %s\n      AWS_
 - [ ] (항목 3) 백업 Job 수동 실행 성공: `kubectl -n storage create job --from=cronjob/mysql-backup mysql-backup-manual` → Completed, 로그에 "백업 완료"
 - [ ] (항목 4) mysql·minio PVC가 `longhorn`: `kubectl -n storage get pvc`, 볼륨 복제본이 cp1에 있음
 - [ ] (항목 4) 외부 S3에 덤프·미러 존재: `mc ls ext/<bucket>/wafer/mysql/`, `mc ls ext/<bucket>/wafer/minio/` (맥에서 `mc alias set ext ...`)
+- [ ] (항목 4) MySQL 클라이언트 복원 경로(4.11)를 임시 DB로 한 번 확인: `mysql -uroot -e 'CREATE DATABASE dr_test'` 후 4.11 명령의 대상 DB를 `dr_test`로 → 행 수 확인 → `DROP DATABASE dr_test`
 - [ ] (항목 4) 복원 검증 수동 실행: `kubectl -n storage create job --from=cronjob/mysql-restore-check restore-check-manual` → 로그 "복원 검증 성공", 테이블별 행 수가 운영 DB와 비슷
 - [ ] (항목 4) MySQL binlog·GTID: `SELECT @@gtid_mode, @@log_bin` → `ON`, `1`
 - [ ] (항목 4) Longhorn 정기 스냅샷: `kubectl -n longhorn-system get recurringjobs`, 다음 날 `snapshots.longhorn.io` 생성 확인
@@ -384,7 +409,7 @@ printf '      AWS_ACCESS_KEY_ID: %s\n      AWS_SECRET_ACCESS_KEY: %s\n      AWS_
      `kubectl delete ns traefik`, `kubectl delete ingressclass traefik`, `kubectl delete clusterrole,clusterrolebinding traefik-traefik`
   3. 기존 ingress-nginx 재설치 (NodePort 32088)
 - 스토리지 이전 롤백 (4.8 도중 문제): helm 레포의 `storageClassName`을 `""`로 되돌려 커밋 → 새 Longhorn PVC·StatefulSet 삭제 → sync(local-path로 재생성) → 2장 백업으로 복원. 3단계에서 보존한 옛 PV를 다시 쓰려면 PV의 `claimRef`를 지우고 같은 이름의 PVC가 그 PV를 지정하도록(`volumeName`) 만든다
-- MySQL replica 끄기: `env=dev` (또는 `mysql/values-full.yaml`의 `replication.enabled: false`) → replica StatefulSet 삭제(PVC는 남음, 필요 없으면 직접 삭제)
+- MySQL replica 끄기: `env=dev` (또는 `mysql/values-full.yaml`의 `replication.enabled: false`) → apps 앱은 prune이 없어 replica StatefulSet이 남는다 → `kubectl -n storage delete sts mysql-mysql-replica` **와 PVC `data-mysql-mysql-replica-0`도 삭제**한다. PVC를 남겨 두면 binlog 보관 기간(3일)이 지난 뒤 full을 다시 켰을 때 replica가 따라잡지 못해(오류 1236) 설정 Job이 계속 실패한다
 - NetworkPolicy 롤백: `network-policy/values.yaml`의 `defaultDenyNamespaces: []`(또는 문제 네임스페이스만 제외)로 커밋 → 해당 네임스페이스의 default-deny·DNS 허용·egress 허용 정책이 함께 제거되고, 기존 ingress 허용 규칙만 남는다
 - HTTPS 리다이렉트 롤백: `traefik/values.yaml`의 `ports.web.http.redirections` 제거 커밋 (TLS 인증서는 그대로 두어도 무방)
 - k3s 설정 롤백: `/etc/rancher/k3s/config.yaml`의 `disable` 항목 제거 후 `systemctl restart k3s`
