@@ -439,6 +439,10 @@ printf '    slack-webhook-url: %s\n' "$(seal "$URL" gitops argocd-notifications-
 - 스토리지 이전 롤백 (4.8 도중 문제): helm 레포의 `storageClassName`을 `""`로 되돌려 커밋 → 새 Longhorn PVC·StatefulSet 삭제 → sync(local-path로 재생성) → 2장 백업으로 복원. 3단계에서 보존한 옛 PV를 다시 쓰려면 PV의 `claimRef`를 지우고 같은 이름의 PVC가 그 PV를 지정하도록(`volumeName`) 만든다
 - MySQL replica 끄기: `env=dev` (또는 `mysql/values-full.yaml`의 `replication.enabled: false`) → apps 앱은 prune이 없어 replica StatefulSet이 남는다 → `kubectl -n storage delete sts mysql-mysql-replica` **와 PVC `data-mysql-mysql-replica-0`도 삭제**한다. PVC를 남겨 두면 binlog 보관 기간(3일)이 지난 뒤 full을 다시 켰을 때 replica가 따라잡지 못해(오류 1236) 설정 Job이 계속 실패한다
 - PDB가 drain을 막을 때(예: 노드 1대만 남은 상태): 해당 Pod가 다른 노드에 Ready로 뜨기를 기다리거나, 급하면 `kubectl delete pdb <이름>` (다음 sync에서 다시 생성된다). full에서 노드를 2대 이상 끌 계획이면 먼저 `env=dev`로 바꾼다(4.3)
+- 알림 참고:
+  - Watchdog(상시 알림)은 Slack으로 보내지 않으므로 "알림 경로 자체가 죽은 것"은 감지하지 못한다. 6.2의 amtool 테스트로 주기적으로 확인한다
+  - `KubeCPUOvercommit`/`KubeMemoryOvercommit`(기본 규칙)는 VM이 작으면 full에서 상시 warning일 수 있다 (C12). 계속 울리면 VM 크기를 조정하거나 route에 `null` 규칙을 추가한다
+  - 백업 실패는 `BackupJobFailed`(CronJob 기준, 다음 성공 시 자동 해소)로만 알린다. storage의 기본 `KubeJobFailed`는 음소거했다
 - 알림 끄기: Slack 소음이 심하면 `monitoring/values.yaml`의 `route.routes`에 `receiver: "null"` 규칙을 추가해 커밋 (일시적으로는 Alertmanager UI의 Silence). Alertmanager 자체를 끄려면 `alertmanager.enabled: false`
 - NetworkPolicy 롤백: `network-policy/values.yaml`의 `defaultDenyNamespaces: []`(또는 문제 네임스페이스만 제외)로 커밋 → 해당 네임스페이스의 default-deny·DNS 허용·egress 허용 정책이 함께 제거되고, 기존 ingress 허용 규칙만 남는다
 - HTTPS 리다이렉트 롤백: `traefik/values.yaml`의 `ports.web.http.redirections` 제거 커밋 (TLS 인증서는 그대로 두어도 무방)
