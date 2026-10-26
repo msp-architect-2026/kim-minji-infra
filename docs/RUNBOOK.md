@@ -28,12 +28,12 @@
 | C5 | 기존 ArgoCD Application 이름 | ApplicationSet이 차트명(`frontend`, `backend`, `ai-serving`, `mysql`, `minio`, `ingress`, `network-policy`, `coredns`, `node-local-dns`, `monitoring`, `loki`)으로 생성 | `argocd/apps/*.yaml` | `kubectl -n gitops get applications`. 이름이 다르면 4.1 절차에서 non-cascade 삭제. **앱 차트는 이름이 곧 Helm 릴리스명**이라, 다르면 리소스 이름·StatefulSet PVC가 새로 생겨 빈 DB/버킷으로 뜬다 → 해당 원소에 기존 릴리스명을 `releaseName`으로 지정하거나 2장 백업으로 데이터 이전 |
 | C6 | ArgoCD 버전 | `templatePatch`(v2.10+), `ignoreMissingValueFiles` 사용 | `argocd/apps/platform.yaml` | `argocd version` 또는 argocd-server 이미지 태그 |
 | C7 | VM 메모리 배분 | 8장 가정: cp1 8GB / w1 7GB / ai2 7GB | UTM 설정 | 8장 표와 `kubectl describe node` Allocatable |
-| C4 | 기존 Sealed Secrets controller 설치 방식·이름·네임스페이스 | `kube-system/sealed-secrets-controller` (가정) | `sealed-secrets/values.yaml` `fullnameOverride`, 릴리스 네임스페이스(`argocd/apps/platform.yaml`) | `kubectl get deploy -A \| grep sealed`, `helm list -A`. 다르면 값을 맞춘다 (키 Secret이 같은 네임스페이스에 있어야 재사용됨) |
+| C4 | 기존 Sealed Secrets controller 설치 방식·이름·네임스페이스 | `kube-system/sealed-secrets-controller` (가정) | `sealed-secrets/values.yaml` `fullnameOverride`, 릴리스 네임스페이스(`argocd/apps/platform.yaml`) | `kubectl get deploy -A \| grep sealed`, `helm list -A`. 다르면 값을 맞춘다 (키 Secret이 같은 네임스페이스에 있어야 재사용됨). 기존 Deployment selector가 `app.kubernetes.io/name: sealed-secrets, app.kubernetes.io/instance: sealed-secrets`가 아니면(예: controller.yaml로 설치 → `name: sealed-secrets-controller`) selector 불변 오류가 나므로 4.1 전에 `kubectl -n kube-system delete deploy sealed-secrets-controller` (키 Secret은 남는다). 기존 Helm 릴리스가 있으면 리소스를 지우지 않도록 릴리스 메타데이터 Secret(`sh.helm.release.v1.<릴리스>.*`)만 삭제하고 `helm uninstall`은 하지 않는다 |
 | C8 | 레포 밖 구성요소 실제 사용량 | 8장 추정치 | — | `kubectl top pod -A` (ArgoCD, k3s 내장 coredns·metrics-server·local-path, Longhorn instance-manager·CSI) |
-| C9 | MetalLB IP 대역 / Traefik LB IP | `PLACEHOLDER-IP-RANGE` | `metallb/values.yaml` `ipAddressPool.addresses` | 노드 IP(.57/.157/.240)·공유기 DHCP 범위와 겹치지 않는 대역(예: `192.168.0.200-192.168.0.209`). 할당된 Traefik IP는 `kubectl -n traefik get svc traefik` |
+| C9 | **(4.1 전 필수)** MetalLB IP 대역 / Traefik LB IP | `PLACEHOLDER-IP-RANGE` | `metallb/values.yaml` `ipAddressPool.addresses` | 노드 IP(.57/.157/.240)·공유기 DHCP 범위와 겹치지 않는 대역(예: `192.168.0.200-192.168.0.209`). 할당된 Traefik IP는 `kubectl -n traefik get svc traefik`. UTM 브리지가 맥 Wi-Fi면 L2 광고(ARP)가 맥 외부로 안 나갈 수 있다 → 맥에서 `curl http://<LB IP>`로 확인, 안 되면 NodePort 32088 경로를 계속 쓴다 |
 | C10 | 기존 ingress-nginx 설치 방식·네임스페이스 | NetworkPolicy가 참조하던 `ingress-nginx` 네임스페이스 | — | `helm list -A \| grep ingress`, `kubectl get ns`. 4.4 전환 시 삭제 대상 |
-| C11 | k3s 내장 traefik·servicelb 사용 여부 | 둘 다 꺼야 함 | cp1 `/etc/rancher/k3s/config.yaml` | `kubectl -n kube-system get helmchart`, `kubectl -n kube-system get ds \| grep svclb` |
-| C12 | VM vCPU 수 | Longhorn instance-manager CPU 예약(dev 5% / full 8%) 계산에 필요 | UTM 설정 | `kubectl describe node` Capacity |
+| C11 | k3s 내장 traefik·servicelb 사용 여부 | 둘 다 꺼야 함 | cp1 `/etc/rancher/k3s/config.yaml` | `kubectl -n kube-system get helmchart`(`traefik`, `traefik-crd` 없어야 함), `kubectl -n kube-system get ds \| grep svclb` |
+| C12 | VM vCPU 수 | dev는 cp1 1대에 CPU requests ~2.0~2.3 core + instance-manager 예약(5%)이 몰린다 → **cp1 3 vCPU 이상** 권장. full instance-manager는 노드마다 8% | UTM 설정 | `kubectl describe node` Capacity·Allocated resources |
 
 ## 2. 사전 백업
 
@@ -58,21 +58,24 @@
 | A. 기존 클러스터 유지 (권장) | 플랫폼 구성요소를 ArgoCD로 추가하고, 스토리지만 local-path → Longhorn으로 데이터 이전 | 다운타임 최소, 기존 SealedSecret 키 유지 | 설정 잔재(수동 설치한 ingress 등) 정리 필요 |
 | B. 새로 설치 | 3대 모두 k3s 재설치 → 처음부터 GitOps로 구성 | 깨끗한 상태, 설치 순서 검증 가능 | Sealed Secrets 키가 바뀌어 **모든 SealedSecret 재암호화** 필요(기존 키를 백업해 복원하면 회피 가능), 데이터 복원 필요 |
 
-A안 절차: 4.5 노드 준비 → 4.1 ApplicationSet 전환 → 4.4 Traefik 전환 → (항목 4) 스토리지 이전. B안 세부 절차는 항목 10에서 정리한다.
+A안 절차: 4.5 노드 준비 → C9 확정·커밋 → 4.4 ingress-nginx 제거 → 4.1 ApplicationSet 전환(Traefik 포함) → (항목 4) 스토리지 이전. B안 세부 절차는 항목 10에서 정리한다.
 
 ## 4. 설치·배포 순서
 
 큰 순서 (sync wave로 자동화하는 부분은 항목 7에서 보완):
 
 1. 노드 준비·k3s 설정 (4.5) — 내장 traefik·servicelb 비활성화, Longhorn 선행 패키지, 디스크 노드 라벨, ai2 taint(4.2)
-2. ArgoCD + ApplicationSet 전환 (4.1)
-3. 플랫폼: sealed-secrets(기존 키 인계) → metallb(C9 확정 후) → cert-manager → longhorn → traefik(4.4 ingress-nginx 전환)
+2. **C9(MetalLB IP 대역)를 확정해 커밋** — placeholder 상태로 4.1을 하면 metallb sync가 webhook에서 거부되고, Traefik LoadBalancer에 IP가 없어 traefik·ingress·monitoring 앱이 계속 Progressing으로 남는다
+3. ingress-nginx 제거 (4.4) — **여기서부터 외부 접속 중단**
+4. ArgoCD ApplicationSet 전환 (4.1) — 플랫폼(sealed-secrets, metallb, cert-manager, longhorn, traefik)과 기존 인프라·앱이 한 번에 생성된다. Traefik이 Ready가 되면 **접속 복구**
 4. 인프라 앱 (DNS → NetworkPolicy → monitoring/loki → backup)
 5. 애플리케이션 (mysql/minio → backend → ai-serving → frontend)
 
 ### 4.1 ApplicationSet 전환 (항목 1)
 
 기존 개별 Application(coredns, loki, monitoring, node-local-dns 및 클러스터에만 있는 앱 Application)을 ApplicationSet이 만드는 Application으로 바꾼다. 리소스는 지우지 않는다.
+
+**선행 조건**: 4.5 완료, C9 커밋 완료, 4.4(ingress-nginx 제거) 완료. ApplicationSet이 traefik·ingress·network-policy를 동시에 만들기 때문에, ingress-nginx가 남아 있으면 NodePort 32088 충돌로 traefik sync가 실패하고 Ingress·NetworkPolicy만 traefik 기준으로 바뀌어 접속이 끊긴다.
 
 1. 기존 Application 목록 확인 (C5): `kubectl -n gitops get applications`
 2. 기존 Application을 **리소스는 남기고** 삭제 (finalizer 제거 후 삭제 = non-cascade)
@@ -84,8 +87,9 @@ A안 절차: 4.5 노드 준비 → 4.1 ApplicationSet 전환 → 4.4 Traefik 전
    ```
 3. 클러스터 Secret 적용: `kubectl apply -f argocd/bootstrap/cluster-in-cluster.yaml` (`env` 라벨 없음 = dev. 다시 apply해도 클러스터에서 붙인 라벨은 유지된다)
 4. 루트 앱 적용: `kubectl apply -f argocd/bootstrap/root.yaml` → `root` → `platform`, `apps` ApplicationSet → 차트별 Application 생성
-5. 확인: `kubectl -n gitops get applicationsets`, 모든 Application `Synced/Healthy`
-6. `backup/argocd-application.yaml`(backup 앱)은 프로파일과 무관해 그대로 둔다
+5. 확인: `kubectl -n gitops get applicationsets`, 모든 Application `Synced/Healthy`. 첫 설치 때 webhook CA 주입 지연으로 cert-manager·metallb가 한 번 실패할 수 있으나 sync `retry`(최대 5회)로 다시 시도한다. 계속 실패하면 `argocd app sync <앱>`
+6. 접속 확인 (4.4의 5단계)
+7. `backup/argocd-application.yaml`(backup 앱)은 프로파일과 무관해 그대로 둔다
 
 ### 4.2 k3s-ai2 taint
 
@@ -115,23 +119,31 @@ kubectl uncordon k3s-w1 k3s-ai2
 - Git의 `argocd/bootstrap/cluster-in-cluster.yaml`에는 `env` 라벨이 없다(= dev). 라벨은 클러스터에서만 바꾼다.
 - **Longhorn 볼륨 복제 수**: StorageClass 복제 수(dev 1 / full 2)는 새 볼륨에만 적용된다. 기존 볼륨은 직접 바꾼다.
   ```bash
-  # full로 올린 뒤: 2 / dev로 내리기 전: 1
+  # dev → full: 3노드를 켜고 env=full sync 후 복제 수 2로
   for v in $(kubectl -n longhorn-system get volumes.longhorn.io -o name); do
     kubectl -n longhorn-system patch $v --type merge -p '{"spec":{"numberOfReplicas":2}}'
   done
   ```
-  full → dev는 복제 수를 1로 내리기 **전에** 볼륨이 cp1에 복제본을 갖고 있는지 확인한다 (`dataLocality: best-effort`라 Pod가 cp1로 옮겨 오면 cp1에 복제본이 생긴다). Longhorn UI 또는 `kubectl -n longhorn-system get replicas.longhorn.io -o wide`.
+  - **full → dev 순서** (순서를 바꾸면 cp1 복제본이 지워지고 w1 복제본만 남을 수 있다):
+    1. `env=dev` 라벨 → sync
+    2. `kubectl drain k3s-w1 ...` → mysql·minio Pod가 cp1에서 Running이 될 때까지 대기
+    3. 각 볼륨의 cp1 복제본이 healthy인지 확인: `kubectl -n longhorn-system get replicas.longhorn.io -o wide` (NODE=k3s-cp1, 상태 running)
+    4. 그다음 복제 수를 1로 낮춘다 (위 명령에서 2 → 1). 낮추지 않아도 된다: 복제 수 2인 볼륨은 cp1만 켜진 상태에서 Degraded로 표시되지만 정상 사용 가능하다
+    5. w1·ai2 전원 끄기
 
 ### 4.4 ingress-nginx → Traefik 전환 (항목 2)
 
-ingress-nginx는 2026년 3월 유지보수가 끝나 Traefik으로 교체했다. NodePort 32088을 Traefik이 이어받으므로 **잠깐(수 분) 접속이 끊긴다.**
+ingress-nginx는 2026년 3월 유지보수가 끝나 Traefik으로 교체했다. NodePort 32088을 Traefik이 이어받으므로 **ingress-nginx 제거부터 Traefik Ready까지 접속이 끊긴다** (4.1의 플랫폼 설치 시간만큼, 수 분~십여 분).
 
-1. k3s 내장 traefik이 꺼져 있는지 확인 (C11, 4.5). 켜져 있으면 IngressClass `traefik` 이름이 겹친다
+**4.1보다 먼저** 1~2단계를 수행한다.
+
+1. k3s 내장 traefik이 꺼져 있는지 확인 (C11, 4.5): `kubectl -n kube-system get helmchart`에 `traefik`, `traefik-crd`가 없어야 한다. 남아 있으면 IngressClass `traefik` 이름이 겹친다
 2. 기존 ingress-nginx 제거 (C10): `helm -n ingress-nginx uninstall <릴리스>` 또는 설치 매니페스트로 삭제 → NodePort 32088 해제
-3. `traefik` Application sync → `kubectl -n traefik get svc traefik`에서 NodePort 32088·LB IP 확인
-4. `ingress`, `monitoring`(Grafana), `network-policy` Application sync → Ingress의 class가 `traefik`인지 확인: `kubectl get ingress -A`
-5. 맥에서 `curl -H 'Host: app.wafer.local' http://192.168.0.57:32088/` 응답 확인. LB IP를 쓰려면 `/etc/hosts`의 `*.wafer.local`을 C9의 Traefik IP로 바꾸고 포트 없이 접속
+3. 4.1 진행 → `kubectl -n traefik get svc traefik`에서 NodePort 32088·EXTERNAL-IP(C9 대역) 확인
+4. Ingress class 확인: `kubectl get ingress -A` (모두 `traefik`)
+5. 맥에서 `curl -H 'Host: app.wafer.local' http://192.168.0.57:32088/` 응답 확인. LB IP를 쓰려면 `/etc/hosts`의 `*.wafer.local`을 Traefik EXTERNAL-IP로 바꾸고 포트 없이 접속 (UTM 브리지가 Wi-Fi면 L2 ARP가 맥 밖으로는 안 나갈 수 있다 — C9)
 6. 기존 ingress-nginx의 `nginx.ingress.kubernetes.io/rewrite-target: /`는 경로 `/`에 대해 실질적으로 동작이 없어 제거했다. 경로 재작성이 필요한 화면이 있으면 Traefik Middleware로 추가
+7. Grafana Ingress는 monitoring 차트 것만 남겼다 (ingress 차트의 `wafer-grafana-ingress`는 중복이라 제거 → ArgoCD prune으로 삭제됨)
 
 ### 4.5 노드 준비·k3s 설정 (항목 2)
 
@@ -147,6 +159,10 @@ sudo systemctl restart k3s
 # 모든 노드: Longhorn 선행 패키지 (Ubuntu/Debian 기준)
 sudo apt-get install -y open-iscsi nfs-common
 sudo systemctl enable --now iscsid
+echo iscsi_tcp | sudo tee /etc/modules-load.d/iscsi_tcp.conf && sudo modprobe iscsi_tcp
+# Ubuntu cloud image: multipathd가 Longhorn 장치를 잡아 "already mounted or busy"가 나므로 끈다
+sudo systemctl disable --now multipathd.socket multipathd 2>/dev/null || true
+# (선택) 사전 점검: longhornctl check preflight
 
 # Longhorn 디스크를 만들 노드(cp1, w1)에만 라벨. ai2에는 붙이지 않는다 → 복제본이 ai2에 생기지 않음
 kubectl label node k3s-cp1 k3s-w1 node.longhorn.io/create-default-disk=true
@@ -206,7 +222,11 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
   2. `kubectl -n gitops delete applicationset platform apps` (`preserveResourcesOnDeletion: true`라 Application이 지워져도 리소스는 유지)
   3. 기존 Application 매니페스트(Git 이력의 `*/application.yaml`) 재적용
 
-- Traefik 전환 롤백: `traefik` Application 삭제(ApplicationSet에서 원소 제거 후 sync) → 기존 ingress-nginx 재설치 → `ingress`/`network-policy`/`monitoring`의 class·네임스페이스 값을 `nginx`/`ingress-nginx`로 되돌려 sync
+- Traefik 전환 롤백:
+  1. `ingress`/`network-policy`/`monitoring`의 class·네임스페이스 값을 `nginx`/`ingress-nginx`로 되돌리고, platform ApplicationSet에서 `traefik` 원소를 제거해 커밋·sync
+  2. ApplicationSet이 `preserveResourcesOnDeletion: true`라 Traefik 리소스는 남는다 → 직접 삭제해 NodePort 32088·IngressClass를 비운다:
+     `kubectl delete ns traefik`, `kubectl delete ingressclass traefik`, `kubectl delete clusterrole,clusterrolebinding traefik-traefik`
+  3. 기존 ingress-nginx 재설치 (NodePort 32088)
 - k3s 설정 롤백: `/etc/rancher/k3s/config.yaml`의 `disable` 항목 제거 후 `systemctl restart k3s`
 
 작성 예정 (항목 3~9). 원칙:
@@ -232,14 +252,14 @@ scripts/resource-summary.py --nodes 3 /tmp/r-infra/full /tmp/r-helm/full
 |---|---|---|---|---|
 | 레포 워크로드 requests | 1635m | 3.25Gi | 2950m | 5.81Gi |
 | 레포 워크로드 (HPA 최대치) | 1885m | 3.75Gi | 4450m | 8.81Gi |
-| 레포 밖·동적 생성 구성요소 (추정, C8) | ~0.4 core | ~1.5Gi | ~0.9 core | ~2.2Gi |
+| 레포 밖·동적 생성 구성요소 (추정, C8) | ~0.4 core | ~1.5Gi | ~1.2 core | ~2.2Gi |
 | k3s 프로세스·OS (추정) | — | ~1.0Gi | — | ~2.2Gi (server 1.0 + agent 0.6×2) |
-| **합계 (HPA 최소)** | **~2.0 core** | **~5.8Gi** | **~3.9 core** | **~10.2Gi** |
-| **합계 (HPA 최대)** | **~2.3 core** | **~6.3Gi** | **~5.4 core** | **~13.2Gi** |
+| **합계 (HPA 최소)** | **~2.0 core** | **~5.8Gi** | **~4.2 core** | **~10.2Gi** |
+| **합계 (HPA 최대)** | **~2.3 core** | **~6.3Gi** | **~5.7 core** | **~13.2Gi** |
 
 레포 밖·동적 생성 구성요소 추정(실제 사용량 기준):
 - ArgoCD ~800Mi, k3s 내장 coredns 70Mi(100m)·metrics-server 70Mi(100m)·local-path 20Mi (full은 coredns 2개분)
-- Longhorn이 직접 만드는 Pod(렌더링 결과에 없음): instance-manager(디스크 노드마다, CPU는 노드 allocatable의 dev 5% / full 8% 예약), CSI plugin DaemonSet, CSI controller(attacher·provisioner·resizer·snapshotter, dev 각 1 / full 각 2), engine-image → dev ~0.5Gi, full ~1.2Gi
+- Longhorn이 직접 만드는 Pod(렌더링 결과에 없음): instance-manager(longhorn-manager가 도는 **모든 노드**, full에서는 ai2 포함. CPU는 노드 allocatable의 dev 5% / full 8% 예약), CSI plugin DaemonSet, CSI controller(attacher·provisioner·resizer·snapshotter, dev 각 1 / full 각 2), engine-image → dev ~0.5Gi, full ~1.2Gi
 - ingress-nginx·sealed-secrets는 항목 2부터 레포 워크로드(traefik, sealed-secrets)로 계산
 
 ### 8.2 32GB 안에서의 배분 (가정, C7)
@@ -251,7 +271,7 @@ scripts/resource-summary.py --nodes 3 /tmp/r-infra/full /tmp/r-helm/full
 | **VM 3대에 쓸 수 있는 양** | **~22GB** |
 | 제안 배분 | cp1 8GB / w1 7GB / ai2 7GB |
 
-- dev: 모든 Pod가 cp1에 몰린다. ~6.3Gi(HPA 최대) < cp1 8GB → 여유 ~1.7GB. 이후 항목(Alertmanager 등)이 더해지면 cp1을 9GB로 늘리고 ai2를 6GB로 줄이는 안을 검토한다.
+- dev: 모든 Pod가 cp1에 몰린다. 메모리 ~6.3Gi(HPA 최대) < cp1 8GB → 여유 ~1.7GB. **CPU requests ~2.3 core → cp1은 3 vCPU 이상 필요 (C12)**, 2 vCPU면 메모리가 남아도 CPU 부족으로 Pending. 이후 항목(Alertmanager 등)이 더해지면 cp1을 9GB로 늘리고 ai2를 6GB로 줄이는 안을 검토한다.
 - full: 합계 ~10.2Gi(HPA 최소) / ~13.2Gi(최대) < 22GB.
 - **주의 (full)**: ai-serving은 ai2 고정이라 HPA 4개면 ai2에 requests 4Gi, **limits 12Gi(3Gi×4)** 가 몰린다. ai2 7GB에서는 limits 기준 과다 할당이다. 항목 8(AI 서빙)에서 maxReplicas 또는 limit 조정을 검토한다.
 
