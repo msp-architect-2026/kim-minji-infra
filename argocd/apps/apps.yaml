@@ -11,24 +11,25 @@ spec:
   syncPolicy:
     preserveResourcesOnDeletion: true
   generators:
+    # 주의: clusters 생성기도 .name(클러스터 이름)을 내보내고 matrix에서 우선한다. 차트 이름은 .chart로 쓴다.
     - matrix:
         generators:
           - clusters: {}
           - list:
               elements:
-                - name: mysql
+                - chart: mysql
                   namespace: storage
-                - name: minio
+                - chart: minio
                   namespace: storage
-                - name: backend
+                - chart: backend
                   namespace: application
-                - name: ai-serving
+                - chart: ai-serving
                   namespace: ai-serving
-                - name: frontend
+                - chart: frontend
                   namespace: application
   template:
     metadata:
-      name: '{{ .name }}'
+      name: '{{ .chart }}'
       namespace: gitops
       labels:
         app.kubernetes.io/part-of: apps
@@ -37,8 +38,9 @@ spec:
       source:
         repoURL: http://gitlab.local:8929/root/kim-minji-helm.git
         targetRevision: HEAD
-        path: '{{ .name }}'
+        path: '{{ .chart }}'
         helm:
+          releaseName: '{{ .chart }}'
           ignoreMissingValueFiles: true
           valueFiles:
             - values.yaml

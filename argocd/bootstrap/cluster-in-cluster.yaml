@@ -1,5 +1,6 @@
 # ArgoCD in-cluster 클러스터 Secret. ApplicationSet이 env 라벨로 프로파일(values-<env>.yaml)을 고른다.
 # 이 Secret이 없거나 env 라벨이 없으면 dev로 동작한다.
+# env 라벨은 Git에 두지 않는다: 다시 apply해도 클러스터에서 붙인 라벨(full 등)이 지워지지 않게 하기 위함.
 # 프로파일 전환은 RUNBOOK "프로파일 전환" 절차를 따른다. 민감정보 없음.
 apiVersion: v1
 kind: Secret
@@ -8,7 +9,6 @@ metadata:
   namespace: gitops
   labels:
     argocd.argoproj.io/secret-type: cluster
-    env: dev
 type: Opaque
 stringData:
   name: in-cluster

@@ -12,32 +12,33 @@ spec:
     # ApplicationSet을 지워도 이미 배포된 리소스는 남긴다
     preserveResourcesOnDeletion: true
   generators:
+    # 주의: clusters 생성기도 .name(클러스터 이름)을 내보내고 matrix에서 우선한다. 차트 이름은 .chart로 쓴다.
     - matrix:
         generators:
           - clusters: {}
           - list:
               elements:
-                - name: coredns
+                - chart: coredns
                   namespace: kube-system
                   serverSideApply: "true"
-                - name: node-local-dns
+                - chart: node-local-dns
                   namespace: kube-system
                   serverSideApply: "false"
-                - name: network-policy
+                - chart: network-policy
                   namespace: default
                   serverSideApply: "false"
-                - name: ingress
+                - chart: ingress
                   namespace: application
                   serverSideApply: "false"
-                - name: monitoring
+                - chart: monitoring
                   namespace: monitoring
                   serverSideApply: "true"
-                - name: loki
+                - chart: loki
                   namespace: monitoring
                   serverSideApply: "false"
   template:
     metadata:
-      name: '{{ .name }}'
+      name: '{{ .chart }}'
       namespace: gitops
       labels:
         app.kubernetes.io/part-of: platform
@@ -46,8 +47,9 @@ spec:
       source:
         repoURL: http://gitlab.local:8929/root/kim-minji-infra.git
         targetRevision: HEAD
-        path: '{{ .name }}'
+        path: '{{ .chart }}'
         helm:
+          releaseName: '{{ .chart }}'
           ignoreMissingValueFiles: true
           valueFiles:
             - values.yaml

@@ -73,7 +73,8 @@ def main():
     for _, d in docs:
         if d["kind"] == "HorizontalPodAutoscaler":
             ref = d["spec"]["scaleTargetRef"]
-            hpa[(d["metadata"].get("namespace"), ref["kind"], ref["name"])] = d["spec"]
+            # Helm 차트는 namespace를 비워 두는 경우가 많아 (kind, name)으로 맞춘다
+            hpa[(ref["kind"], ref["name"])] = d["spec"]
 
     rows = []
     for release, d in docs:
@@ -85,7 +86,7 @@ def main():
             else:
                 n = spec.get("replicas", 1)
                 n_max = n
-                h = hpa.get((meta.get("namespace"), kind, meta["name"]))
+                h = hpa.get((kind, meta["name"]))
                 if h:
                     n, n_max = h.get("minReplicas", 1), h["maxReplicas"]
         elif kind == "Prometheus":
