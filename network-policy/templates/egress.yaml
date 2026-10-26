@@ -1,3 +1,6 @@
+# egress 허용 규칙은 해당 네임스페이스가 defaultDenyNamespaces에 있을 때만 만든다.
+# (기본 차단을 끈 네임스페이스에 egress 정책만 남으면 DNS까지 막히기 때문)
+{{- if has "application" .Values.defaultDenyNamespaces }}
 # backend → mysql(3306), minio(9000), ai-serving(8000)
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -41,7 +44,9 @@ spec:
     ports:
     - protocol: TCP
       port: 8000
+{{- end }}
 ---
+{{- if has "ai-serving" .Values.defaultDenyNamespaces }}
 # ai-serving → minio(9000): 모델 파일 다운로드
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -65,7 +70,9 @@ spec:
     ports:
     - protocol: TCP
       port: 9000
+{{- end }}
 ---
+{{- if has "storage" .Values.defaultDenyNamespaces }}
 # storage 내부: 백업 CronJob → mysql(3306), minio(9000)
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -84,3 +91,4 @@ spec:
       port: 3306
     - protocol: TCP
       port: 9000
+{{- end }}
