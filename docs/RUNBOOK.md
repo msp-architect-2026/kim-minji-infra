@@ -394,6 +394,9 @@ printf '      AWS_ACCESS_KEY_ID: %s\n      AWS_SECRET_ACCESS_KEY: %s\n      AWS_
 - [ ] Traefik 2개가 서로 다른 노드, PDB 존재: `kubectl -n traefik get pod -o wide`, `kubectl -n traefik get pdb`
 - [ ] Longhorn 볼륨 복제본 2개가 cp1·w1에 분산 (4.3 복제 수 변경 후), ai2에는 복제본 없음
 - [ ] (항목 4) MySQL replica: `mysql-mysql-replication-setup` Job Completed, `kubectl -n storage exec mysql-mysql-replica-0 -- sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql -uroot -e "SHOW REPLICA STATUS\G"'`에서 `Replica_IO_Running: Yes`, `Replica_SQL_Running: Yes`, primary와 replica가 서로 다른 노드
+- [ ] (항목 5) PDB: `kubectl get pdb -A` → frontend·backend(minAvailable 1), ai-serving(maxUnavailable 1), coredns, traefik
+- [ ] (항목 5) frontend·backend 2개가 서로 다른 노드: `kubectl -n application get pod -o wide`
+- [ ] (항목 5) drain 무중단 확인: 맥에서 `while true; do curl -sk -o /dev/null -w '%{http_code}\n' https://app.wafer.local/; sleep 1; done`을 띄운 채 `kubectl drain k3s-w1 --ignore-daemonsets --delete-emptydir-data` → 200이 계속 나오는지, drain이 PDB 때문에 멈추지 않는지 → `kubectl uncordon k3s-w1`
 - [ ] (항목 4) 복제 확인: primary에 기록한 레코드가 replica에서 조회됨, replica에 쓰기 시도 시 `super-read-only` 오류
 
 ## 7. 롤백
@@ -410,6 +413,7 @@ printf '      AWS_ACCESS_KEY_ID: %s\n      AWS_SECRET_ACCESS_KEY: %s\n      AWS_
   3. 기존 ingress-nginx 재설치 (NodePort 32088)
 - 스토리지 이전 롤백 (4.8 도중 문제): helm 레포의 `storageClassName`을 `""`로 되돌려 커밋 → 새 Longhorn PVC·StatefulSet 삭제 → sync(local-path로 재생성) → 2장 백업으로 복원. 3단계에서 보존한 옛 PV를 다시 쓰려면 PV의 `claimRef`를 지우고 같은 이름의 PVC가 그 PV를 지정하도록(`volumeName`) 만든다
 - MySQL replica 끄기: `env=dev` (또는 `mysql/values-full.yaml`의 `replication.enabled: false`) → apps 앱은 prune이 없어 replica StatefulSet이 남는다 → `kubectl -n storage delete sts mysql-mysql-replica` **와 PVC `data-mysql-mysql-replica-0`도 삭제**한다. PVC를 남겨 두면 binlog 보관 기간(3일)이 지난 뒤 full을 다시 켰을 때 replica가 따라잡지 못해(오류 1236) 설정 Job이 계속 실패한다
+- PDB가 drain을 막을 때(예: 노드 1대만 남은 상태): 해당 Pod가 다른 노드에 Ready로 뜨기를 기다리거나, 급하면 `kubectl delete pdb <이름>` (다음 sync에서 다시 생성된다). full에서 노드를 2대 이상 끌 계획이면 먼저 `env=dev`로 바꾼다(4.3)
 - NetworkPolicy 롤백: `network-policy/values.yaml`의 `defaultDenyNamespaces: []`(또는 문제 네임스페이스만 제외)로 커밋 → 해당 네임스페이스의 default-deny·DNS 허용·egress 허용 정책이 함께 제거되고, 기존 ingress 허용 규칙만 남는다
 - HTTPS 리다이렉트 롤백: `traefik/values.yaml`의 `ports.web.http.redirections` 제거 커밋 (TLS 인증서는 그대로 두어도 무방)
 - k3s 설정 롤백: `/etc/rancher/k3s/config.yaml`의 `disable` 항목 제거 후 `systemctl restart k3s`
