@@ -38,6 +38,7 @@
 | C15 | GitLab Runner 인터넷 접근 (Trivy) | `aquasec/trivy:0.75.0` 이미지 pull, 취약점 DB(ghcr.io) 다운로드 | 앱 레포 `.gitlab-ci.yml` `image_scan` | Runner에서 `ghcr.io`, Docker Hub 접근 가능 여부. 막혀 있으면 job이 실패(allow_failure라 배포는 진행) |
 | C16 | 외부 S3 호환 백업 저장소 | `external.enabled: false`(클러스터 내 백업만), `https://PLACEHOLDER-S3-ENDPOINT`, `PLACEHOLDER-BUCKET`, Longhorn `backupTarget: ~` | `backup/values.yaml` `external.*`(확정 후 `enabled: true`), `longhorn/values.yaml` `longhorn.defaultBackupStore.backupTarget`·`recurringJobs.backup.enabled`, `network-policy/values.yaml` `backupExternalEgress.ports` | AWS S3·B2·R2·NAS·맥 호스트 MinIO 중 결정. **같은 맥의 디스크면 맥 고장 시 함께 사라진다**는 점을 고려. 엔드포인트 포트가 443·9000이 아니면 egress 포트 추가. Longhorn 형식: `s3://<bucket>@<region>/longhorn` |
 | C17 | k3s 데이터스토어 종류 | SQLite 가정 (server 1대) | RUNBOOK 4.10 | `ls /var/lib/rancher/k3s/server/db` — `state.db`면 SQLite, `etcd/`면 embedded etcd(`k3s etcd-snapshot` 사용) |
+| C18 | ArgoCD Notifications 컨트롤러·기존 설정 | 설치 시 함께 깔렸다고 가정, `argocd-notifications-cm`/`-secret`을 이어받음 | `argocd-notifications/` 차트 | `kubectl -n gitops get deploy argocd-notifications-controller`. 없으면 ArgoCD 설치 매니페스트(설치 버전과 같은 것)로 컨트롤러만 추가. 기존 cm에 직접 넣은 설정이 있으면 차트 values로 옮긴다 |
 | C12 | VM vCPU 수 | dev는 cp1 1대에 CPU requests ~2.0~2.3 core + instance-manager 예약(5%)이 몰린다 → **cp1 3 vCPU 이상** 권장. full instance-manager는 노드마다 8% | UTM 설정 | `kubectl describe node` Capacity·Allocated resources |
 
 ## 2. 사전 백업
@@ -305,7 +306,9 @@ mc cat ext/<bucket>/wafer/mysql/backup_<시각>.sql.gz | gunzip | sed '1{/999999
 | `mysql-secret`의 `MYSQL_REPLICATION_PASSWORD` | storage | 위와 같은 위치에 키 추가 | full(replica)에서만 필요. 새 값 (kim-minji-helm README) |
 | `backup-s3` (`accessKey`, `secretKey`) | storage | `kim-minji-infra/backup/values.yaml` `external.sealedSecret.encryptedData` | 외부 S3 계정 (5.3). `external.enabled: true`일 때만 필요 (기본 false → 클러스터 내 백업만). 켰는데 비어 있거나 엔드포인트가 placeholder면 렌더링 실패 |
 | `longhorn-backup-s3` (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_ENDPOINTS`) | longhorn-system | `kim-minji-infra/longhorn/values.yaml` `backupS3.sealedSecret.encryptedData` | 선택 (5.3). 비어 있으면 만들지 않음 → 스냅샷만 동작 |
-| 그 밖의 항목 | | | 작성 예정 (항목 6) |
+| `alertmanager-slack` (`webhook-url`) | monitoring | `kim-minji-infra/monitoring/values.yaml` `alertmanagerSlack.sealedSecret.encryptedData` | Slack Incoming Webhook URL (5.4). 비어 있으면 monitoring 앱 렌더링 실패 |
+| `argocd-notifications-secret` (`slack-webhook-url`) | gitops | `kim-minji-infra/argocd-notifications/values.yaml` `sealedSecret.encryptedData` | 같은 Webhook URL (5.4). 기존 Secret annotate 필요 |
+| GitLab CI 변수 `SLACK_WEBHOOK_URL` (masked, protected 해제) | ai·backend·frontend·infra 프로젝트 | GitLab 프로젝트(또는 그룹) Settings → CI/CD → Variables | 같은 Webhook URL. 없으면 실패 알림 job이 건너뛴다 |
 
 - mysql·minio·grafana-admin은 값이 비어 있으면 **렌더링이 실패**한다 (평문 배포 방지). ArgoCD 앱이 `ComparisonError`로 멈추고 기존 리소스는 그대로 남는다. 4.1 전에 모두 채워 커밋한다.
 - 백업 CronJob은 `mysql-secret`, `minio-secret`을 그대로 참조하므로 별도 시크릿이 없다.
@@ -357,6 +360,22 @@ printf '      AWS_ACCESS_KEY_ID: %s\n      AWS_SECRET_ACCESS_KEY: %s\n      AWS_
   `kubectl -n longhorn-system patch backuptargets.longhorn.io default --type merge -p '{"spec":{"backupTargetURL":"s3://<bucket>@<region>/longhorn","credentialSecret":"longhorn-backup-s3"}}'`
 - 외부 S3의 MinIO 미러(`{prefix}/minio/`)는 지우지 않고 쌓인다 (`mc mirror --overwrite`, 삭제 반영 안 함). 용량이 걱정되면 버킷 수명주기 규칙을 둔다
 
+### 5.4 Slack Incoming Webhook (항목 6)
+
+Slack 앱(Incoming Webhooks)에서 알림 채널용 Webhook URL 하나를 만든다. 같은 URL을 세 곳에 쓴다. bash에서 실행한다.
+
+```bash
+read -r -s -p "Slack Webhook URL: " URL; echo
+seal() { printf '%s' "$1" | kubeseal --raw --namespace "$2" --name "$3" --from-file=/dev/stdin; }
+# monitoring/values.yaml → alertmanagerSlack.sealedSecret.encryptedData (6칸)
+printf '      webhook-url: %s\n' "$(seal "$URL" monitoring alertmanager-slack)"
+# argocd-notifications/values.yaml → sealedSecret.encryptedData (4칸)
+printf '    slack-webhook-url: %s\n' "$(seal "$URL" gitops argocd-notifications-secret)"
+```
+
+- ArgoCD 설치가 만든 `argocd-notifications-secret`은 controller가 덮어쓰지 않으므로 먼저 소유권을 넘긴다: `kubectl -n gitops annotate secret argocd-notifications-secret sealedsecrets.bitnami.com/managed=true`
+- GitLab: 4개 프로젝트에 `SLACK_WEBHOOK_URL` 변수(Masked). 실패 알림 job은 develop·main(infra는 전 브랜치)에서 돈다
+
 ## 6. 배포 후 확인 체크리스트
 
 작성 예정 (항목 2~9에서 계속 추가). 노드 1대(cp1만) / 3대 켠 상태로 나눠 확인한다.
@@ -367,6 +386,7 @@ printf '      AWS_ACCESS_KEY_ID: %s\n      AWS_SECRET_ACCESS_KEY: %s\n      AWS_
   - 없음 (4.8 스토리지 이전 후). 이전 전이라면 mysql·minio는 local-path PV가 있는 k3s-w1이 꺼져 있으면 Pending
 - [ ] coredns replica 1 Running
 - [ ] ai-serving이 cp1에 Running (ai2 선호지만 ai2가 꺼져 있으므로), OOMKilled 없음 (C2)
+- [ ] (항목 6) dev에서 w1·ai2를 꺼도 Slack에 노드 다운·TargetDown 알림이 오지 않음 (cp1 관련·서비스·백업 알림은 온다)
 - [ ] Prometheus retention 2d: `kubectl -n monitoring get prometheus -o jsonpath='{.items[0].spec.retention}'`
 - [ ] Traefik 1개 Running, `curl -H 'Host: app.wafer.local' http://<cp1 IP>:32088/` 200
 - [ ] MetalLB: `kubectl -n traefik get svc traefik`에 EXTERNAL-IP 할당 (C9 대역)
@@ -394,6 +414,11 @@ printf '      AWS_ACCESS_KEY_ID: %s\n      AWS_SECRET_ACCESS_KEY: %s\n      AWS_
 - [ ] Traefik 2개가 서로 다른 노드, PDB 존재: `kubectl -n traefik get pod -o wide`, `kubectl -n traefik get pdb`
 - [ ] Longhorn 볼륨 복제본 2개가 cp1·w1에 분산 (4.3 복제 수 변경 후), ai2에는 복제본 없음
 - [ ] (항목 4) MySQL replica: `mysql-mysql-replication-setup` Job Completed, `kubectl -n storage exec mysql-mysql-replica-0 -- sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql -uroot -e "SHOW REPLICA STATUS\G"'`에서 `Replica_IO_Running: Yes`, `Replica_SQL_Running: Yes`, primary와 replica가 서로 다른 노드
+- [ ] (항목 6) Alertmanager Slack 수신 테스트: `kubectl -n monitoring port-forward svc/monitoring-kube-prometheus-alertmanager 9093` 후
+  `amtool alert add RunbookTest severity=warning namespace=test --annotation=summary="알림 테스트" --alertmanager.url=http://127.0.0.1:9093` → Slack 채널 수신, 5분 뒤 resolved
+- [ ] (항목 6) 규칙 로드: Prometheus UI(port-forward 9090) → Alerts에 `wafer.backend`·`wafer.ai-serving`·`wafer.backup` 그룹, k3s 컴포넌트(KubeControllerManagerDown 등) 알림 없음
+- [ ] (항목 6) ArgoCD Notifications: `kubectl -n gitops exec deploy/argocd-notifications-controller -- argocd admin notifications template notify app-sync-failed frontend --recipient slack-webhook` → Slack 수신
+- [ ] (항목 6) GitLab CI 실패 알림: 아무 브랜치에서 실패하는 커밋(예: infra의 Dockerfile 오타)을 푸시하거나 파이프라인을 수동 실패시켜 Slack 수신 확인
 - [ ] (항목 5) PDB: `kubectl get pdb -A` → frontend·backend(minAvailable 1), ai-serving(maxUnavailable 1), coredns, traefik
 - [ ] (항목 5) frontend·backend·traefik 2개가 cp1·w1에 하나씩, ai2에는 없음: `kubectl -n application get pod -o wide`, `kubectl -n traefik get pod -o wide` (ai2는 nodeAffinity로 제외)
 - [ ] (항목 5) drain 무중단 확인 (위 항목에서 w1에 frontend·backend가 있는 것을 먼저 확인): 맥에서 `while true; do curl -sk -o /dev/null -w '%{http_code}\n' https://app.wafer.local/; sleep 1; done`을 띄운 채 `kubectl drain k3s-w1 --ignore-daemonsets --delete-emptydir-data` → 200이 계속 나오는지, drain이 PDB 때문에 멈추지 않는지 → `kubectl uncordon k3s-w1`
@@ -414,11 +439,12 @@ printf '      AWS_ACCESS_KEY_ID: %s\n      AWS_SECRET_ACCESS_KEY: %s\n      AWS_
 - 스토리지 이전 롤백 (4.8 도중 문제): helm 레포의 `storageClassName`을 `""`로 되돌려 커밋 → 새 Longhorn PVC·StatefulSet 삭제 → sync(local-path로 재생성) → 2장 백업으로 복원. 3단계에서 보존한 옛 PV를 다시 쓰려면 PV의 `claimRef`를 지우고 같은 이름의 PVC가 그 PV를 지정하도록(`volumeName`) 만든다
 - MySQL replica 끄기: `env=dev` (또는 `mysql/values-full.yaml`의 `replication.enabled: false`) → apps 앱은 prune이 없어 replica StatefulSet이 남는다 → `kubectl -n storage delete sts mysql-mysql-replica` **와 PVC `data-mysql-mysql-replica-0`도 삭제**한다. PVC를 남겨 두면 binlog 보관 기간(3일)이 지난 뒤 full을 다시 켰을 때 replica가 따라잡지 못해(오류 1236) 설정 Job이 계속 실패한다
 - PDB가 drain을 막을 때(예: 노드 1대만 남은 상태): 해당 Pod가 다른 노드에 Ready로 뜨기를 기다리거나, 급하면 `kubectl delete pdb <이름>` (다음 sync에서 다시 생성된다). full에서 노드를 2대 이상 끌 계획이면 먼저 `env=dev`로 바꾼다(4.3)
+- 알림 끄기: Slack 소음이 심하면 `monitoring/values.yaml`의 `route.routes`에 `receiver: "null"` 규칙을 추가해 커밋 (일시적으로는 Alertmanager UI의 Silence). Alertmanager 자체를 끄려면 `alertmanager.enabled: false`
 - NetworkPolicy 롤백: `network-policy/values.yaml`의 `defaultDenyNamespaces: []`(또는 문제 네임스페이스만 제외)로 커밋 → 해당 네임스페이스의 default-deny·DNS 허용·egress 허용 정책이 함께 제거되고, 기존 ingress 허용 규칙만 남는다
 - HTTPS 리다이렉트 롤백: `traefik/values.yaml`의 `ports.web.http.redirections` 제거 커밋 (TLS 인증서는 그대로 두어도 무방)
 - k3s 설정 롤백: `/etc/rancher/k3s/config.yaml`의 `disable` 항목 제거 후 `systemctl restart k3s`
 
-작성 예정 (항목 5~9). 원칙:
+작성 예정 (항목 7~9). 원칙:
 
 - 코드 롤백은 Git revert → ArgoCD sync
 - 프로파일 전환 롤백은 클러스터 Secret의 `env` 라벨을 이전 값으로 되돌린다
@@ -435,16 +461,16 @@ scripts/resource-summary.py --nodes 1 /tmp/r-infra/dev /tmp/r-helm/dev
 scripts/resource-summary.py --nodes 3 /tmp/r-infra/full /tmp/r-helm/full
 ```
 
-### 8.1 요약 (항목 4 기준, 2026-10-26)
+### 8.1 요약 (항목 6 기준, 2026-10-26)
 
 | 구분 | dev (cp1 1대) CPU | dev 메모리 | full (3대) CPU | full 메모리 |
 |---|---|---|---|---|
-| 레포 워크로드 requests | 1635m | 3.25Gi | 3150m | 6.31Gi |
-| 레포 워크로드 (HPA 최대치) | 1885m | 3.75Gi | 4650m | 9.31Gi |
+| 레포 워크로드 requests | 1660m | 3.31Gi | 3175m | 6.38Gi |
+| 레포 워크로드 (HPA 최대치) | 1910m | 3.81Gi | 4675m | 9.38Gi |
 | 레포 밖·동적 생성 구성요소 (추정, C8) | ~0.4 core | ~1.5Gi | ~1.2 core | ~2.2Gi |
 | k3s 프로세스·OS (추정) | — | ~1.0Gi | — | ~2.2Gi (server 1.0 + agent 0.6×2) |
-| **합계 (HPA 최소)** | **~2.0 core** | **~5.8Gi** | **~4.4 core** | **~10.7Gi** |
-| **합계 (HPA 최대)** | **~2.3 core** | **~6.3Gi** | **~5.9 core** | **~13.7Gi** |
+| **합계 (HPA 최소)** | **~2.1 core** | **~5.8Gi** | **~4.4 core** | **~10.8Gi** |
+| **합계 (HPA 최대)** | **~2.3 core** | **~6.3Gi** | **~5.9 core** | **~13.8Gi** |
 
 레포 밖·동적 생성 구성요소 추정(실제 사용량 기준):
 - ArgoCD ~800Mi, k3s 내장 coredns 70Mi(100m)·metrics-server 70Mi(100m)·local-path 20Mi (full은 coredns 2개분)
@@ -461,7 +487,7 @@ scripts/resource-summary.py --nodes 3 /tmp/r-infra/full /tmp/r-helm/full
 | 제안 배분 | cp1 8GB / w1 7GB / ai2 7GB |
 
 - dev: 모든 Pod가 cp1에 몰린다. 메모리 ~6.3Gi(HPA 최대) < cp1 8GB → 여유 ~1.7GB. **CPU requests ~2.3 core → cp1은 3 vCPU 이상 필요 (C12)**, 2 vCPU면 메모리가 남아도 CPU 부족으로 Pending. 이후 항목(Alertmanager 등)이 더해지면 cp1을 9GB로 늘리고 ai2를 6GB로 줄이는 안을 검토한다.
-- full: 합계 ~10.7Gi(HPA 최소) / ~13.7Gi(최대) < 22GB. (항목 4: MySQL replica 200m·512Mi 추가)
+- full: 합계 ~10.8Gi(HPA 최소) / ~13.8Gi(최대) < 22GB. (항목 4: MySQL replica 200m·512Mi, 항목 6: Alertmanager 25m·64Mi 추가)
 - 백업·복원 검증·복제 설정 Job은 실행될 때만 잠깐 뜨므로 합계에 넣지 않았다 (백업 이미지 기준 수십~수백 MiB).
 - **주의 (full)**: ai-serving은 ai2 고정이라 HPA 4개면 ai2에 requests 4Gi, **limits 12Gi(3Gi×4)** 가 몰린다. ai2 7GB에서는 limits 기준 과다 할당이다. 항목 8(AI 서빙)에서 maxReplicas 또는 limit 조정을 검토한다.
 
@@ -488,6 +514,7 @@ dev (`--nodes 1`):
 | metallb | DaemonSet | metallb-speaker | 1 | 25m · 64Mi | 25m | 64Mi |
 | metallb | Deployment | metallb-controller | 1 | 25m · 64Mi | 25m | 64Mi |
 | minio | StatefulSet | minio-minio | 1 | 200m · 256Mi | 200m | 256Mi |
+| monitoring | Alertmanager | monitoring-kube-prometheus-alertmanager | 1 | 25m · 64Mi | 25m | 64Mi |
 | monitoring | DaemonSet | monitoring-prometheus-node-exporter | 1 | 20m · 32Mi | 20m | 32Mi |
 | monitoring | Deployment | monitoring-grafana | 1 | 50m · 128Mi (미설정 포함) | 50m | 128Mi |
 | monitoring | Deployment | monitoring-kube-prometheus-operator | 1 | 50m · 64Mi | 50m | 64Mi |
@@ -497,8 +524,8 @@ dev (`--nodes 1`):
 | node-local-dns | DaemonSet | node-local-dns | 1 | 100m · 64Mi | 100m | 64Mi |
 | sealed-secrets | Deployment | sealed-secrets-controller | 1 | 25m · 64Mi | 25m | 64Mi |
 | traefik | Deployment | traefik | 1 | 50m · 64Mi | 50m | 64Mi |
-| **합계** | | | | | **1635m** | **3.25Gi** |
-| **HPA 최대치 기준** | | | | | **1885m** | **3.75Gi** |
+| **합계** | | | | | **1660m** | **3.31Gi** |
+| **HPA 최대치 기준** | | | | | **1910m** | **3.81Gi** |
 
 full (`--nodes 3`):
 
@@ -519,6 +546,7 @@ full (`--nodes 3`):
 | metallb | DaemonSet | metallb-speaker | 3 | 25m · 64Mi | 75m | 192Mi |
 | metallb | Deployment | metallb-controller | 1 | 25m · 64Mi | 25m | 64Mi |
 | minio | StatefulSet | minio-minio | 1 | 200m · 256Mi | 200m | 256Mi |
+| monitoring | Alertmanager | monitoring-kube-prometheus-alertmanager | 1 | 25m · 64Mi | 25m | 64Mi |
 | monitoring | DaemonSet | monitoring-prometheus-node-exporter | 3 | 20m · 32Mi | 60m | 96Mi |
 | monitoring | Deployment | monitoring-grafana | 1 | 50m · 128Mi (미설정 포함) | 50m | 128Mi |
 | monitoring | Deployment | monitoring-kube-prometheus-operator | 1 | 50m · 64Mi | 50m | 64Mi |
@@ -529,7 +557,7 @@ full (`--nodes 3`):
 | node-local-dns | DaemonSet | node-local-dns | 3 | 100m · 64Mi | 300m | 192Mi |
 | sealed-secrets | Deployment | sealed-secrets-controller | 1 | 25m · 64Mi | 25m | 64Mi |
 | traefik | Deployment | traefik | 2 | 50m · 64Mi | 100m | 128Mi |
-| **합계** | | | | | **3150m** | **6.31Gi** |
-| **HPA 최대치 기준** | | | | | **4650m** | **9.31Gi** |
+| **합계** | | | | | **3175m** | **6.38Gi** |
+| **HPA 최대치 기준** | | | | | **4675m** | **9.38Gi** |
 
-> 이후 항목(Alertmanager, KEDA, Tempo/OTel 등)이 추가될 때마다 이 표를 갱신한다.
+> 이후 항목(KEDA, Tempo/OTel 등)이 추가될 때마다 이 표를 갱신한다.

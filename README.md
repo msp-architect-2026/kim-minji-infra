@@ -63,6 +63,7 @@ kim-minji-infra/
 ├── ingress/          # 서비스별 Ingress 규칙 (class: traefik)
 ├── monitoring/       # kube-prometheus-stack (Prometheus + Grafana)
 ├── loki/             # Loki + Promtail 로깅 스택
+├── argocd-notifications/ # ArgoCD sync 실패·Degraded → Slack
 ├── backup/           # 백업 Helm 차트: MySQL·MinIO 백업(클러스터 내 + 외부 S3), 주간 복원 검증
 ├── network-policy/   # Calico NetworkPolicy (네임스페이스 간 접근 제어)
 ├── coredns/          # CoreDNS replica 2 + 노드 분산 배치 (k3s 기본 Deployment에 SSA 패치)
@@ -136,7 +137,8 @@ Calico NetworkPolicy로 네임스페이스 간 접근 제어를 구현했습니�
 
 ```
 monitoring 네임스페이스
-├─ Prometheus       : 메트릭 수집 (backend, ai-serving ServiceMonitor 30s interval)
+├─ Prometheus       : 메트릭 수집 (backend, ai-serving ServiceMonitor 30s interval), 알림 규칙(wafer-rules)
+├─ Alertmanager     : Slack Incoming Webhook으로 알림 (dev는 꺼 둔 노드 관련 알림 음소거)
 ├─ Grafana          : 대시보드 시각화 (grafana.wafer.local, anonymous 접근, iframe 임베드)
 ├─ node-exporter    : VM 레벨 메트릭 (CPU, 메모리, 디스크)
 ├─ kube-state-metrics: Pod / Deployment 상태
