@@ -4,3 +4,7 @@ grafanaAdmin:
     encryptedData:
       admin-user: AgDUMMY-validate-only
       admin-password: AgDUMMY-validate-only
+alertmanagerSlack:
+  sealedSecret:
+    encryptedData:
+      webhook-url: AgDUMMY-validate-only

@@ -10,3 +10,19 @@ kube-prometheus-stack:
         limits:
           cpu: 300m
           memory: 768Mi
+  # dev는 k3s-w1·k3s-ai2를 꺼 두므로 그로 인한 노드·DaemonSet·수집 대상 알림은 Slack으로 보내지 않는다
+  # (routes 목록은 통째로 덮어쓰므로 base의 Watchdog 규칙도 다시 적는다)
+  alertmanager:
+    config:
+      route:
+        routes:
+          - receiver: "null"
+            matchers:
+              - alertname =~ "Watchdog|InfoInhibitor"
+          - receiver: "null"
+            matchers:
+              - alertname =~ "KubeNodeNotReady|KubeNodeUnreachable"
+              - node =~ "k3s-w1|k3s-ai2"
+          - receiver: "null"
+            matchers:
+              - alertname =~ "TargetDown|KubeDaemonSetRolloutStuck|KubeDaemonSetNotScheduled|KubeDaemonSetMisScheduled"
