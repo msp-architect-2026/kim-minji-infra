@@ -1,0 +1,57 @@
+# 복원 검증: 가장 최근 덤프(외부 S3가 있으면 외부, 없으면 클러스터 내)를 임시 DB(restore_check)에 복원하고
+# 테이블·행 수를 확인한 뒤 삭제한다. 실패하면 Job이 실패로 끝나 알림 대상이 된다.
+# binlog에 남기지 않아(sql_log_bin=0) full 프로파일의 replica로 전파되지 않는다.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: mysql-restore-check
+  namespace: {{ .Release.Namespace }}
+spec:
+  schedule: {{ .Values.schedule.restoreCheck | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        metadata:
+          labels:
+            {{- include "backup.podLabels" "restore-check" | nindent 12 }}
+        spec:
+          containers:
+          - name: restore-check
+            image: {{ .Values.image }}
+            imagePullPolicy: Always
+            command:
+            - /bin/bash
+            - -c
+            - |
+              set -euo pipefail
+              {{- include "backup.mcSetup" . | nindent 14 }}
+              if [ -n "${EXT_ENDPOINT:-}" ]; then SRC=ext/${EXT_BUCKET}/${EXT_PREFIX}/mysql; else SRC=local/${BACKUP_BUCKET}/mysql; fi
+              LATEST=$(mc ls ${SRC}/ | awk '{print $NF}' | grep '^backup_.*\.sql\.gz$' | sort | tail -1)
+              [ -n "$LATEST" ] || { echo "덤프 없음: ${SRC}"; exit 1; }
+              echo "복원 대상: ${SRC}/${LATEST}"
+              export MYSQL_PWD="$MYSQL_ROOT_PASSWORD"
+              M=(mysql -h {{ .Values.mysql.host }} -uroot "--init-command=SET sql_log_bin=0")
+              trap '"${M[@]}" -e "DROP DATABASE IF EXISTS restore_check" || true' EXIT
+              "${M[@]}" -e "DROP DATABASE IF EXISTS restore_check; CREATE DATABASE restore_check"
+              mc cat ${SRC}/${LATEST} | gunzip | "${M[@]}" restore_check
+              TABLES=$("${M[@]}" -N -B -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='restore_check'")
+              echo "복원된 테이블: ${TABLES}"
+              [ "$TABLES" -gt 0 ] || { echo "복원 실패: 테이블 0개"; exit 1; }
+              for t in $("${M[@]}" -N -B -e "SELECT table_name FROM information_schema.tables WHERE table_schema='restore_check'"); do
+                echo "  ${t}: $("${M[@]}" -N -B -e "SELECT COUNT(*) FROM restore_check.\`${t}\`")행"
+              done
+              echo "복원 검증 성공"
+            env:
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.mysql.secretName }}
+                  key: MYSQL_ROOT_PASSWORD
+            {{- include "backup.minioEnv" . | nindent 12 }}
+          imagePullSecrets:
+          - name: gitlab-registry-secret
+          restartPolicy: Never

@@ -1,0 +1,4 @@
+apiVersion: v2
+name: backup
+description: MySQL·MinIO 백업(클러스터 내 MinIO + 외부 S3 호환 저장소)과 주간 복원 검증
+version: 1.0.0
