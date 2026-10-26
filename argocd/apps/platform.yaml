@@ -79,6 +79,13 @@ spec:
           selfHeal: true
         syncOptions:
           - CreateNamespace=true
+        # 첫 설치 때 webhook CA 주입 지연(cert-manager, metallb) 등으로 실패한 sync를 자동으로 다시 시도한다
+        retry:
+          limit: 5
+          backoff:
+            duration: 10s
+            factor: 2
+            maxDuration: 3m
   # coredns(k3s Deployment 부분 패치), CRD가 큰 차트(monitoring, metallb, cert-manager, longhorn, traefik)는 Server-Side Apply 필요
   templatePatch: |
     {{- if eq .serverSideApply "true" }}
@@ -87,4 +94,10 @@ spec:
         syncOptions:
           - CreateNamespace=true
           - ServerSideApply=true
+        retry:
+          limit: 5
+          backoff:
+            duration: 10s
+            factor: 2
+            maxDuration: 3m
     {{- end }}
