@@ -13,28 +13,29 @@ spec:
     - name: wafer.backend
       rules:
         - alert: BackendDown
-          expr: up{job="{{ .Values.alertRules.backendJob }}"} == 0 or absent(up{job="{{ .Values.alertRules.backendJob }}"})
-          for: 2m
+          # 모든 Pod가 수집 불가일 때만 (롤링 업데이트 중 한 Pod 기동 지연은 제외)
+          expr: sum by (namespace) (up{job="{{ .Values.alertRules.backendJob }}"}) == 0 or absent(up{job="{{ .Values.alertRules.backendJob }}",namespace="application"})
+          for: 5m
           labels:
             severity: critical
           annotations:
-            summary: backend 메트릭 수집 실패 (Pod 다운 또는 스크레이프 불가)
-            description: "{{`{{ $labels.instance }}`}}"
+            summary: backend 전체 다운 (모든 Pod 메트릭 수집 불가)
+            description: "kubectl -n application get pod -l app.kubernetes.io/name=backend"
         - alert: BackendHighErrorRate
           expr: |
-            sum(rate(http_server_requests_seconds_count{job="{{ .Values.alertRules.backendJob }}",status=~"5.."}[5m]))
-              / sum(rate(http_server_requests_seconds_count{job="{{ .Values.alertRules.backendJob }}"}[5m])) > {{ .Values.alertRules.errorRatio }}
+            sum by (namespace) (rate(http_server_requests_seconds_count{job="{{ .Values.alertRules.backendJob }}",uri!~"/actuator.*",status=~"5.."}[5m]))
+              / sum by (namespace) (rate(http_server_requests_seconds_count{job="{{ .Values.alertRules.backendJob }}",uri!~"/actuator.*"}[5m])) > {{ .Values.alertRules.errorRatio }}
           for: 5m
           labels:
             severity: warning
           annotations:
-            summary: backend 5xx 비율이 {{ mul .Values.alertRules.errorRatio 100 }}%를 넘음
+            summary: backend 5xx 비율이 {{ mulf .Values.alertRules.errorRatio 100 }}%를 넘음
             description: "현재 {{`{{ $value | humanizePercentage }}`}}"
         - alert: BackendHighLatency
           # 평균 응답시간 (p95는 히스토그램 활성화 후 SLO 항목에서 대체)
           expr: |
-            sum(rate(http_server_requests_seconds_sum{job="{{ .Values.alertRules.backendJob }}",uri!~"/actuator.*"}[5m]))
-              / sum(rate(http_server_requests_seconds_count{job="{{ .Values.alertRules.backendJob }}",uri!~"/actuator.*"}[5m])) > {{ .Values.alertRules.backendLatencySeconds }}
+            sum by (namespace) (rate(http_server_requests_seconds_sum{job="{{ .Values.alertRules.backendJob }}",uri!~"/actuator.*"}[5m]))
+              / sum by (namespace) (rate(http_server_requests_seconds_count{job="{{ .Values.alertRules.backendJob }}",uri!~"/actuator.*"}[5m])) > {{ .Values.alertRules.backendLatencySeconds }}
           for: 10m
           labels:
             severity: warning
@@ -42,7 +43,7 @@ spec:
             summary: backend 평균 응답시간이 {{ .Values.alertRules.backendLatencySeconds }}초를 넘음
             description: "현재 {{`{{ $value | humanizeDuration }}`}}"
         - alert: BackendCircuitBreakerOpen
-          expr: max by (name) (resilience4j_circuitbreaker_state{job="{{ .Values.alertRules.backendJob }}",state="open"}) == 1
+          expr: max by (namespace, name) (resilience4j_circuitbreaker_state{job="{{ .Values.alertRules.backendJob }}",state="open"}) == 1
           for: 1m
           labels:
             severity: critical
@@ -52,44 +53,58 @@ spec:
     - name: wafer.ai-serving
       rules:
         - alert: AIServingDown
-          expr: up{job="{{ .Values.alertRules.aiJob }}"} == 0 or absent(up{job="{{ .Values.alertRules.aiJob }}"})
-          for: 2m
+          expr: sum by (namespace) (up{job="{{ .Values.alertRules.aiJob }}"}) == 0 or absent(up{job="{{ .Values.alertRules.aiJob }}",namespace="ai-serving"})
+          for: 5m
           labels:
             severity: critical
           annotations:
-            summary: ai-serving 메트릭 수집 실패 (Pod 다운 또는 스크레이프 불가)
-            description: "{{`{{ $labels.instance }}`}}"
+            summary: ai-serving 전체 다운 (모든 Pod 메트릭 수집 불가)
+            description: "kubectl -n ai-serving get pod (모델 로딩 실패·OOMKilled 확인)"
         - alert: AIInferenceErrors
           expr: |
-            sum(rate(http_requests_total{job="{{ .Values.alertRules.aiJob }}",handler="/predict",status="5xx"}[5m]))
-              / sum(rate(http_requests_total{job="{{ .Values.alertRules.aiJob }}",handler="/predict"}[5m])) > {{ .Values.alertRules.errorRatio }}
+            sum by (namespace) (rate(http_requests_total{job="{{ .Values.alertRules.aiJob }}",handler="/predict",status="5xx"}[5m]))
+              / sum by (namespace) (rate(http_requests_total{job="{{ .Values.alertRules.aiJob }}",handler="/predict"}[5m])) > {{ .Values.alertRules.errorRatio }}
           for: 5m
           labels:
             severity: warning
           annotations:
-            summary: AI 추론(/predict) 에러 비율이 {{ mul .Values.alertRules.errorRatio 100 }}%를 넘음
+            summary: AI 추론(/predict) 에러 비율이 {{ mulf .Values.alertRules.errorRatio 100 }}%를 넘음
             description: "현재 {{`{{ $value | humanizePercentage }}`}}"
         - alert: AIInferenceSlow
+          # instrumentator 기본 버킷(0.1, 0.5, 1, +Inf)이라 p95를 1초 이상으로는 구분할 수 없다 → 1초 넘는 요청 비율로 판단
           expr: |
-            histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{job="{{ .Values.alertRules.aiJob }}",handler="/predict"}[5m])))
-              > {{ .Values.alertRules.aiP95Seconds }}
+            1 - (
+              sum by (namespace) (rate(http_request_duration_seconds_bucket{job="{{ .Values.alertRules.aiJob }}",handler="/predict",le="1.0"}[5m]))
+                / sum by (namespace) (rate(http_request_duration_seconds_count{job="{{ .Values.alertRules.aiJob }}",handler="/predict"}[5m]))
+            ) > {{ .Values.alertRules.aiSlowRatio }}
           for: 10m
           labels:
             severity: warning
           annotations:
-            summary: AI 추론(/predict) p95가 {{ .Values.alertRules.aiP95Seconds }}초를 넘음
-            description: "현재 {{`{{ $value | humanizeDuration }}`}}"
+            summary: AI 추론(/predict) 요청의 {{ mulf .Values.alertRules.aiSlowRatio 100 }}% 넘게 1초 초과
+            description: "1초 초과 비율 {{`{{ $value | humanizePercentage }}`}}"
     - name: wafer.backup
       rules:
         - alert: BackupJobFailed
-          expr: kube_job_status_failed{namespace="storage",job_name=~"(mysql-backup|minio-backup|mysql-restore-check).*"} > 0
+          # CronJob 기준: 마지막 실행(스케줄)이 마지막 성공보다 뒤이고 실행 중인 Job이 없으면 실패 상태.
+          # 다음 실행이 성공하면 저절로 해소된다 (실패한 Job 객체가 남아 있어도 계속 울리지 않는다). 한 번도 성공 못 한 경우도 포함
+          expr: |
+            (
+              kube_cronjob_status_last_schedule_time{namespace="storage",cronjob=~"mysql-backup|minio-backup|mysql-restore-check"}
+                > on (namespace, cronjob) kube_cronjob_status_last_successful_time{namespace="storage"}
+              or
+              kube_cronjob_status_last_schedule_time{namespace="storage",cronjob=~"mysql-backup|minio-backup|mysql-restore-check"}
+                unless on (namespace, cronjob) kube_cronjob_status_last_successful_time{namespace="storage"}
+            )
+            and on (namespace, cronjob) kube_cronjob_status_active{namespace="storage"} == 0
+          for: 10m
           labels:
             severity: critical
           annotations:
-            summary: "백업·복원 검증 Job 실패 ({{`{{ $labels.job_name }}`}})"
-            description: "kubectl -n storage logs job/{{`{{ $labels.job_name }}`}}"
+            summary: "{{`{{ $labels.cronjob }}`}} 마지막 실행 실패"
+            description: "kubectl -n storage get jobs -l app.kubernetes.io/name=backup --sort-by=.status.startTime → 실패한 Job 로그 확인"
         - alert: BackupNotRecent
-          expr: time() - max by (cronjob) (kube_cronjob_status_last_successful_time{namespace="storage",cronjob=~"mysql-backup|minio-backup"}) > {{ .Values.alertRules.backupMaxAgeHours }} * 3600
+          expr: time() - max by (namespace, cronjob) (kube_cronjob_status_last_successful_time{namespace="storage",cronjob=~"mysql-backup|minio-backup"}) > {{ .Values.alertRules.backupMaxAgeHours }} * 3600
           for: 30m
           labels:
             severity: critical

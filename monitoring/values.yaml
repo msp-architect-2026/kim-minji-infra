@@ -795,6 +795,11 @@ kube-prometheus-stack:
           - receiver: "null"
             matchers:
               - alertname =~ "Watchdog|InfoInhibitor"
+          # 백업 Job 실패는 BackupJobFailed(CronJob 기준, 성공 시 해소)로 알린다. 기본 KubeJobFailed는 실패 Job이 남는 한 계속 울린다
+          - receiver: "null"
+            matchers:
+              - alertname = "KubeJobFailed"
+              - namespace = "storage"
       inhibit_rules:
         # critical이 울리면 같은 대상의 warning은 묶어서 숨긴다
         - source_matchers: [severity = "critical"]
@@ -810,7 +815,7 @@ kube-prometheus-stack:
             - api_url_file: /etc/alertmanager/secrets/alertmanager-slack/webhook-url
               send_resolved: true
               title: '[{{ .Status | toUpper }}{{ if eq .Status "firing" }}:{{ .Alerts.Firing | len }}{{ end }}] {{ .CommonLabels.alertname }}'
-              text: >-
+              text: |-
                 {{ range .Alerts }}*{{ .Labels.severity }}* {{ .Labels.namespace }} {{ .Annotations.summary }}
                 {{ .Annotations.description }}
                 {{ end }}
@@ -836,5 +841,5 @@ alertRules:
   aiJob: ai-serving-ai-serving
   errorRatio: 0.05
   backendLatencySeconds: 1
-  aiP95Seconds: 3
+  aiSlowRatio: 0.1
   backupMaxAgeHours: 26

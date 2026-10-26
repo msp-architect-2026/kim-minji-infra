@@ -21,8 +21,17 @@ kube-prometheus-stack:
               - alertname =~ "Watchdog|InfoInhibitor"
           - receiver: "null"
             matchers:
-              - alertname =~ "KubeNodeNotReady|KubeNodeUnreachable"
-              - node =~ "k3s-w1|k3s-ai2"
+              - alertname = "KubeJobFailed"
+              - namespace = "storage"
           - receiver: "null"
             matchers:
-              - alertname =~ "TargetDown|KubeDaemonSetRolloutStuck|KubeDaemonSetNotScheduled|KubeDaemonSetMisScheduled"
+              - alertname =~ "KubeNodeNotReady|KubeNodeUnreachable"
+              - node =~ "k3s-w1|k3s-ai2"
+          # 노드마다 도는 수집 대상(DaemonSet·kubelet)의 TargetDown만 음소거. 다른 서비스의 TargetDown은 그대로 보낸다
+          - receiver: "null"
+            matchers:
+              - alertname = "TargetDown"
+              - job =~ "kubelet|.*node-exporter|node-local-dns.*|promtail.*"
+          - receiver: "null"
+            matchers:
+              - alertname =~ "KubeDaemonSetRolloutStuck|KubeDaemonSetNotScheduled|KubeDaemonSetMisScheduled"
