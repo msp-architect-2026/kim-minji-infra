@@ -1,0 +1,29 @@
+# Ingress 컨트롤러 (ingress-nginx 대체). k3s 내장 traefik은 꺼야 한다 (RUNBOOK 4장).
+traefik:
+  deployment:
+    replicas: 1
+
+  ingressClass:
+    enabled: true
+    isDefaultClass: true
+    name: traefik
+
+  ports:
+    web:
+      # 기존 접속 주소(*.wafer.local:32088)를 유지한다
+      nodePort: 32088
+    websecure:
+      nodePort: 32443
+
+  # MetalLB가 IP를 할당한다. IP가 정해지면 /etc/hosts를 그 IP로 바꿀 수 있다 (RUNBOOK C9)
+  service:
+    spec:
+      type: LoadBalancer
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
