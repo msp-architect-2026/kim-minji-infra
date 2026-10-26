@@ -1,3 +1,2 @@
 # Helm 차트가 아닌 raw 매니페스트 (yamllint + kubeconform)
-backup
 argocd
