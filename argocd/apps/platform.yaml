@@ -1,0 +1,72 @@
+# 클러스터 공통 인프라(kim-minji-infra 차트)를 프로파일별로 배포한다.
+# 프로파일: in-cluster 클러스터 Secret의 env 라벨 (dev | full). 라벨이나 Secret이 없으면 dev.
+#   values.yaml(공통) → values-<env>.yaml(있으면) 순서로 덮어쓴다.
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: platform
+  namespace: gitops
+spec:
+  goTemplate: true
+  syncPolicy:
+    # ApplicationSet을 지워도 이미 배포된 리소스는 남긴다
+    preserveResourcesOnDeletion: true
+  generators:
+    - matrix:
+        generators:
+          - clusters: {}
+          - list:
+              elements:
+                - name: coredns
+                  namespace: kube-system
+                  serverSideApply: "true"
+                - name: node-local-dns
+                  namespace: kube-system
+                  serverSideApply: "false"
+                - name: network-policy
+                  namespace: default
+                  serverSideApply: "false"
+                - name: ingress
+                  namespace: application
+                  serverSideApply: "false"
+                - name: monitoring
+                  namespace: monitoring
+                  serverSideApply: "true"
+                - name: loki
+                  namespace: monitoring
+                  serverSideApply: "false"
+  template:
+    metadata:
+      name: '{{ .name }}'
+      namespace: gitops
+      labels:
+        app.kubernetes.io/part-of: platform
+    spec:
+      project: default
+      source:
+        repoURL: http://gitlab.local:8929/root/kim-minji-infra.git
+        targetRevision: HEAD
+        path: '{{ .name }}'
+        helm:
+          ignoreMissingValueFiles: true
+          valueFiles:
+            - values.yaml
+            - 'values-{{ with .metadata }}{{ with .labels }}{{ with .env }}{{ . }}{{ else }}dev{{ end }}{{ else }}dev{{ end }}{{ else }}dev{{ end }}.yaml'
+      destination:
+        server: '{{ .server }}'
+        namespace: '{{ .namespace }}'
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true
+  # coredns(k3s Deployment 부분 패치), monitoring(CRD 크기)은 Server-Side Apply 필요
+  templatePatch: |
+    {{- if eq .serverSideApply "true" }}
+    spec:
+      syncPolicy:
+        syncOptions:
+          - CreateNamespace=true
+          - ServerSideApply=true
+    {{- end }}
