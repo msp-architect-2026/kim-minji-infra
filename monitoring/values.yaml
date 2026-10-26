@@ -1,5 +1,13 @@
 kube-prometheus-stack:
   grafana:
+    # requests 미설정 시 BestEffort가 되어 메모리 압박 때 먼저 축출된다
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: 300m
+        memory: 384Mi
     adminPassword: "admin1234"
     ingress:
       enabled: true
@@ -697,6 +705,33 @@ kube-prometheus-stack:
         limits:
           cpu: 500m
           memory: 1Gi
+
+  prometheusOperator:
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: 200m
+        memory: 256Mi
+
+  kube-state-metrics:
+    resources:
+      requests:
+        cpu: 20m
+        memory: 64Mi
+      limits:
+        cpu: 100m
+        memory: 192Mi
+
+  prometheus-node-exporter:
+    resources:
+      requests:
+        cpu: 20m
+        memory: 32Mi
+      limits:
+        cpu: 100m
+        memory: 96Mi
 
   alertmanager:
     enabled: false
