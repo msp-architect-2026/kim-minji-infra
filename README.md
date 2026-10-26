@@ -63,7 +63,7 @@ kim-minji-infra/
 ├── ingress/          # 서비스별 Ingress 규칙 (class: traefik)
 ├── monitoring/       # kube-prometheus-stack (Prometheus + Grafana)
 ├── loki/             # Loki + Promtail 로깅 스택
-├── backup/           # MySQL / MinIO 백업 CronJob
+├── backup/           # 백업 Helm 차트: MySQL·MinIO 백업(클러스터 내 + 외부 S3), 주간 복원 검증
 ├── network-policy/   # Calico NetworkPolicy (네임스페이스 간 접근 제어)
 ├── coredns/          # CoreDNS replica 2 + 노드 분산 배치 (k3s 기본 Deployment에 SSA 패치)
 ├── node-local-dns/   # NodeLocal DNSCache DaemonSet
@@ -154,13 +154,18 @@ monitoring 네임스페이스
 
 ## ▍백업 CronJob
 
+`backup/` Helm 차트 (platform ApplicationSet, `storage` 네임스페이스)
+
 | 대상 | 스케줄 | 방식 | 저장 위치 |
 |------|--------|------|-----------|
-| MySQL | 매일 02:00 | `mysqldump` 전체 덤프 | MinIO `wafer-backup` 버킷 |
-| MinIO | 매일 03:00 | `mc mirror` 증분 백업 | MinIO `wafer-backup` 버킷 |
+| MySQL | 매일 02:00 | `mysqldump --single-transaction` + gzip | 클러스터 내 MinIO `wafer-backup/mysql/`(7일) + 외부 S3 `{prefix}/mysql/`(14일) |
+| MinIO | 매일 03:00 | `mc mirror --overwrite` | `wafer-backup/{bucket}` + 외부 S3 `{prefix}/minio/{bucket}` |
+| 복원 검증 | 매주 일 04:00 | 최신 덤프를 임시 DB(`restore_check`)에 복원 → 테이블·행 수 확인 → 삭제 | — |
 
+- 계정은 `mysql-secret`, `minio-secret`, `backup-s3`(외부 S3) SealedSecret에서 읽고, 명령행에 노출하지 않습니다 (`MYSQL_PWD`, `MC_HOST_*`).
+- 실패하면 Job이 실패로 끝납니다 (`set -euo pipefail`, `backoffLimit`). 외부 S3 주소·계정은 RUNBOOK C16, 5.3.
+- Longhorn 볼륨은 매일 스냅샷(3개 보관), 백업 대상(외부 S3)을 정하면 매일 백업(7개 보관).
 - 커스텀 이미지: `debian:bookworm-slim` + `mysql-client` + `mc` (ARM64)
-- `successfulJobsHistoryLimit: 3`, `failedJobsHistoryLimit: 1`
 
 ---
 
