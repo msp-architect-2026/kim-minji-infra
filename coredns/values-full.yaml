@@ -2,3 +2,5 @@
 replicaCount: 2
 topologySpread:
   whenUnsatisfiable: DoNotSchedule
+pdb:
+  enabled: true

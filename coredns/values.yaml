@@ -4,3 +4,7 @@ replicaCount: 2
 topologySpread:
   # DoNotSchedule: 노드가 1대뿐이면 두 번째 replica가 Pending. dev는 ScheduleAnyway로 덮어쓴다
   whenUnsatisfiable: DoNotSchedule
+
+# full에서만 켠다 (dev는 replica 1이라 PDB가 drain을 막는다)
+pdb:
+  enabled: false
