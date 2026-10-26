@@ -1,0 +1,11 @@
+# Sealed Secrets controller. 기존 컨트롤러를 이어받으므로 이름·네임스페이스(kube-system)를 기존과 같게 둔다 (RUNBOOK C4).
+# 암호화 키(sealedsecrets.bitnami.com/sealed-secrets-key 라벨 Secret)는 같은 네임스페이스에 있으면 그대로 재사용된다.
+sealed-secrets:
+  fullnameOverride: sealed-secrets-controller
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
