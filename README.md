@@ -206,5 +206,16 @@ Pod (dnsConfig ndots:2)
 - 배포 순서: `coredns` → CoreDNS 2개 Ready·노드 분산 확인 → `node-local-dns`.
 - NodeLocal 롤백: `kubectl -n kube-system delete ds node-local-dns`. node-cache가 종료 시 iptables 규칙과 `nodelocaldns` 인터페이스를 정리해 kube-proxy → CoreDNS 경로로 돌아갑니다.
 
+---
 
+## ▍정적 검증 / 클러스터 작업
 
+```bash
+scripts/validate.sh          # dev, full 모두
+scripts/validate.sh dev      # 특정 프로파일만
+```
+
+- 클러스터 접속 없이 `helm lint`, `helm template`, `kubeconform`(CRD는 datreeio CRDs-catalog), `yamllint`를 실행합니다.
+- 대상 차트는 `scripts/releases.txt`, raw 매니페스트는 `scripts/manifests.txt`에 등록합니다.
+- 필요 도구: `helm`, `kubeconform`, `yamllint`
+- 코드 머지 후 클러스터에서 수행할 작업은 [`docs/RUNBOOK.md`](docs/RUNBOOK.md)에 순서대로 정리합니다.
