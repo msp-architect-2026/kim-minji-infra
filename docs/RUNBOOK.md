@@ -395,8 +395,8 @@ printf '      AWS_ACCESS_KEY_ID: %s\n      AWS_SECRET_ACCESS_KEY: %s\n      AWS_
 - [ ] Longhorn 볼륨 복제본 2개가 cp1·w1에 분산 (4.3 복제 수 변경 후), ai2에는 복제본 없음
 - [ ] (항목 4) MySQL replica: `mysql-mysql-replication-setup` Job Completed, `kubectl -n storage exec mysql-mysql-replica-0 -- sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql -uroot -e "SHOW REPLICA STATUS\G"'`에서 `Replica_IO_Running: Yes`, `Replica_SQL_Running: Yes`, primary와 replica가 서로 다른 노드
 - [ ] (항목 5) PDB: `kubectl get pdb -A` → frontend·backend(minAvailable 1), ai-serving(maxUnavailable 1), coredns, traefik
-- [ ] (항목 5) frontend·backend 2개가 서로 다른 노드: `kubectl -n application get pod -o wide`
-- [ ] (항목 5) drain 무중단 확인: 맥에서 `while true; do curl -sk -o /dev/null -w '%{http_code}\n' https://app.wafer.local/; sleep 1; done`을 띄운 채 `kubectl drain k3s-w1 --ignore-daemonsets --delete-emptydir-data` → 200이 계속 나오는지, drain이 PDB 때문에 멈추지 않는지 → `kubectl uncordon k3s-w1`
+- [ ] (항목 5) frontend·backend·traefik 2개가 cp1·w1에 하나씩, ai2에는 없음: `kubectl -n application get pod -o wide`, `kubectl -n traefik get pod -o wide` (ai2는 nodeAffinity로 제외)
+- [ ] (항목 5) drain 무중단 확인 (위 항목에서 w1에 frontend·backend가 있는 것을 먼저 확인): 맥에서 `while true; do curl -sk -o /dev/null -w '%{http_code}\n' https://app.wafer.local/; sleep 1; done`을 띄운 채 `kubectl drain k3s-w1 --ignore-daemonsets --delete-emptydir-data` → 200이 계속 나오는지, drain이 PDB 때문에 멈추지 않는지 → `kubectl uncordon k3s-w1`
 - [ ] (항목 4) 복제 확인: primary에 기록한 레코드가 replica에서 조회됨, replica에 쓰기 시도 시 `super-read-only` 오류
 
 ## 7. 롤백

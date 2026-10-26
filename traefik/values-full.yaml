@@ -5,11 +5,21 @@ traefik:
   podDisruptionBudget:
     enabled: true
     maxUnavailable: 1
+  # AI 전용 노드(k3s-ai2)에는 두지 않는다 (PreferNoSchedule taint는 분산 계산에서 빠지지 않으므로 nodeAffinity로 제외)
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions:
+              - key: kubernetes.io/hostname
+                operator: NotIn
+                values:
+                  - k3s-ai2
   topologySpreadConstraints:
     - maxSkew: 1
       topologyKey: kubernetes.io/hostname
       whenUnsatisfiable: DoNotSchedule
-      # cordon·NotReady 노드는 분산 계산에서 빼서, 노드 1대가 내려가도 롤링 업데이트가 멈추지 않게 한다
+      # cordon·NotReady 노드(NoSchedule/NoExecute taint)는 분산 계산에서 빼서, 노드 1대가 내려가도 롤링 업데이트가 멈추지 않게 한다
       nodeTaintsPolicy: Honor
       labelSelector:
         matchLabels:
