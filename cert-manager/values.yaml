@@ -1,0 +1,37 @@
+cert-manager:
+  crds:
+    enabled: true
+    # Application을 지워도 CRD(와 발급된 인증서)는 남긴다
+    keep: true
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+  webhook:
+    resources:
+      requests:
+        cpu: 10m
+        memory: 32Mi
+      limits:
+        cpu: 100m
+        memory: 128Mi
+  cainjector:
+    resources:
+      requests:
+        cpu: 10m
+        memory: 64Mi
+      limits:
+        cpu: 100m
+        memory: 256Mi
+  # Helm hook Job. ArgoCD에서는 sync 상태로 충분히 확인되므로 끈다
+  startupapicheck:
+    enabled: false
+
+# *.wafer.local 내부 TLS용 자체 서명 루트 CA. 맥에서 신뢰 등록 절차는 RUNBOOK 참고
+ca:
+  commonName: wafer.local Root CA
+  secretName: wafer-root-ca
+  issuerName: wafer-ca
