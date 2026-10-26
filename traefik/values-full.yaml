@@ -9,6 +9,8 @@ traefik:
     - maxSkew: 1
       topologyKey: kubernetes.io/hostname
       whenUnsatisfiable: DoNotSchedule
+      # cordon·NotReady 노드는 분산 계산에서 빼서, 노드 1대가 내려가도 롤링 업데이트가 멈추지 않게 한다
+      nodeTaintsPolicy: Honor
       labelSelector:
         matchLabels:
           app.kubernetes.io/name: traefik
