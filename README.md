@@ -60,6 +60,8 @@ kim-minji-infra/
 ├── cert-manager/     # cert-manager + 자체 서명 루트 CA ClusterIssuer(wafer-ca)
 ├── longhorn/         # Longhorn 블록 스토리지 (dev 복제 1 / full 2, cp1·w1 디스크)
 ├── traefik/          # Traefik Ingress Controller (ingress-nginx 대체)
+├── keda/             # KEDA (ai-serving 요청 수 기반 오토스케일링)
+├── argo-rollouts/    # Argo Rollouts (ai-serving 카나리 배포)
 ├── ingress/          # 서비스별 Ingress 규칙 (class: traefik)
 ├── monitoring/       # kube-prometheus-stack (Prometheus + Grafana)
 ├── loki/             # Loki + Promtail 로깅 스택
