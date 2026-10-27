@@ -1,0 +1,27 @@
+# MetalLB L2 모드. k3s 내장 servicelb(klipper-lb)는 꺼야 한다 (RUNBOOK 4장).
+metallb:
+  # BGP 백엔드(frr-k8s)는 쓰지 않는다. L2 모드는 speaker만으로 동작한다 (차트 0.16 기본값이 true)
+  frrk8s:
+    enabled: false
+  controller:
+    resources:
+      requests:
+        cpu: 25m
+        memory: 64Mi
+      limits:
+        cpu: 200m
+        memory: 128Mi
+  speaker:
+    resources:
+      requests:
+        cpu: 25m
+        memory: 64Mi
+      limits:
+        cpu: 200m
+        memory: 128Mi
+
+# LoadBalancer IP 대역. 노드 IP(192.168.0.57/.157/.240)·공유기 DHCP 범위와 겹치지 않는 대역으로 확정 필요 (RUNBOOK C9)
+ipAddressPool:
+  name: wafer-pool
+  addresses:
+    - PLACEHOLDER-IP-RANGE  # 예: 192.168.0.200-192.168.0.209

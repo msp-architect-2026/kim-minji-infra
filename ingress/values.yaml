@@ -1,3 +1,6 @@
+# Ingress 컨트롤러: Traefik (ingress-nginx 유지보수 종료로 교체)
+ingressClassName: traefik
+
 ingress:
   app:
     host: app.wafer.local
@@ -14,8 +17,4 @@ ingress:
     serviceName: ai-serving-ai-serving
     servicePort: 8000
     serviceNamespace: ai-serving
-  grafana:
-    host: grafana.wafer.local
-    serviceName: monitoring-grafana
-    servicePort: 80
-    serviceNamespace: monitoring  
+# Grafana Ingress는 monitoring 차트(kube-prometheus-stack grafana.ingress)가 만든다

@@ -1,0 +1,16 @@
+# dev 프로파일: 볼륨 복제 1 (cp1), Longhorn 컴포넌트 최소화
+# StorageClass 복제 수는 새로 만드는 볼륨에만 적용된다. 기존 볼륨은 RUNBOOK 4.3 절차로 바꾼다
+longhorn:
+  persistence:
+    defaultClassReplicaCount: 1
+  defaultSettings:
+    defaultReplicaCount: '{"v1":"1","v2":"1"}'
+    # instance-manager가 노드 CPU를 예약하는 비율(%). 기본 12%는 VM 환경에 과하다
+    guaranteedInstanceManagerCPU: '{"v1":"5","v2":"5"}'
+    # full에서 켠 값이 설정 CR에 남지 않도록 명시적으로 끈다
+    replicaAutoBalance: disabled
+  csi:
+    attacherReplicaCount: 1
+    provisionerReplicaCount: 1
+    resizerReplicaCount: 1
+    snapshotterReplicaCount: 1

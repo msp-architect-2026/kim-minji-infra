@@ -22,7 +22,7 @@
 
 이 레포는 멀티노드 k3s 클러스터 위에서 웨이퍼 결함 탐지 서비스를 안정적으로 운영하기 위한 **인프라 구성 전체를 GitOps 방식으로 관리**합니다.
 
-Nginx Ingress, Prometheus+Grafana 모니터링 스택, Loki 로깅, 백업 CronJob, Calico NetworkPolicy 등 클러스터 공통 인프라가 모두 이 레포의 Helm Chart로 정의되어 있으며, ArgoCD가 이를 감지해 자동 배포합니다.
+Traefik Ingress, MetalLB, cert-manager, Longhorn, Sealed Secrets, Prometheus+Grafana 모니터링 스택, Loki 로깅, 백업 CronJob, Calico NetworkPolicy 등 클러스터 공통 인프라가 모두 이 레포의 Helm Chart로 정의되어 있으며, ArgoCD가 이를 감지해 자동 배포합니다.
 
 ---
 
@@ -43,7 +43,7 @@ Nginx Ingress, Prometheus+Grafana 모니터링 스택, Loki 로깅, 백업 CronJ
 
 | 노드 | IP | 역할 | 주요 워크로드 |
 |------|-----|------|----------------|
-| k3s-cp1 | 192.168.0.57 | Control Plane | API Server, ArgoCD, Nginx Ingress |
+| k3s-cp1 | 192.168.0.57 | Control Plane | API Server, ArgoCD, Traefik |
 | k3s-w1 | 192.168.0.157 | Worker (RAM 12G) | frontend, backend, mysql, minio, GitLab CE |
 | k3s-ai2 | 192.168.0.240 | AI 전용 Worker | ai-serving (HPA 포함) |
 
@@ -55,7 +55,12 @@ Nginx Ingress, Prometheus+Grafana 모니터링 스택, Loki 로깅, 백업 CronJ
 
 ```
 kim-minji-infra/
-├── ingress/          # Nginx Ingress Controller 설정
+├── sealed-secrets/   # Sealed Secrets controller (kube-system, 기존 키 인계)
+├── metallb/          # MetalLB L2 + IPAddressPool
+├── cert-manager/     # cert-manager + 자체 서명 루트 CA ClusterIssuer(wafer-ca)
+├── longhorn/         # Longhorn 블록 스토리지 (dev 복제 1 / full 2, cp1·w1 디스크)
+├── traefik/          # Traefik Ingress Controller (ingress-nginx 대체)
+├── ingress/          # 서비스별 Ingress 규칙 (class: traefik)
 ├── monitoring/       # kube-prometheus-stack (Prometheus + Grafana)
 ├── loki/             # Loki + Promtail 로깅 스택
 ├── backup/           # MySQL / MinIO 백업 CronJob
@@ -75,8 +80,8 @@ kim-minji-infra/
 
 | 프로파일 | 용도 | 주요 차이 |
 |----------|------|-----------|
-| `dev` (기본) | 노드 1~2대만 켠 개발 환경 | CoreDNS replica 1·ScheduleAnyway, Prometheus 보존 2d·resource 최소, Loki resource 최소 |
-| `full` | 3노드 To-Be | CoreDNS replica 2·DoNotSchedule, Prometheus 보존 7d |
+| `dev` (기본) | 노드 1~2대만 켠 개발 환경 | CoreDNS replica 1·ScheduleAnyway, Prometheus 보존 2d·resource 최소, Loki resource 최소, Traefik 1, Longhorn 복제 1·CSI 1 |
+| `full` | 3노드 To-Be | CoreDNS replica 2·DoNotSchedule, Prometheus 보존 7d, Traefik 2·PDB·노드 분산, Longhorn 복제 2·CSI 2 |
 
 - 차트마다 `values.yaml`(공통) + `values-dev.yaml` / `values-full.yaml`(있을 때만)을 겹쳐 씁니다.
 - ApplicationSet은 in-cluster 클러스터 Secret의 `env` 라벨로 프로파일을 고릅니다. Secret이나 라벨이 없으면 `dev`입니다.
@@ -91,7 +96,8 @@ kim-minji-infra/
 | `application` | frontend (React), backend (Spring Boot) |
 | `ai-serving` | ai-serving (FastAPI), HPA |
 | `storage` | MySQL, MinIO |
-| `infra` | Nginx Ingress Controller |
+| `traefik` | Traefik Ingress Controller |
+| `metallb-system` / `cert-manager` / `longhorn-system` | MetalLB / cert-manager / Longhorn |
 | `gitops` | ArgoCD |
 | `monitoring` | Prometheus, Grafana, Loki, Promtail |
 
@@ -102,8 +108,8 @@ kim-minji-infra/
 ```
 맥북 브라우저
 └─ *.wafer.local:32088
-   └─ /etc/hosts → 192.168.0.57
-      └─ Nginx Ingress (NodePort 32088)
+   └─ /etc/hosts → 192.168.0.57 (또는 MetalLB가 준 Traefik LB IP, 포트 80)
+      └─ Traefik (NodePort 32088 / LoadBalancer)
          ├─ app.wafer.local      → application/frontend:80
          ├─ api.wafer.local      → application/backend:8080
          ├─ ai.wafer.local       → ai-serving/ai-serving:8000
@@ -118,9 +124,9 @@ Calico NetworkPolicy로 네임스페이스 간 접근 제어를 구현했습니�
 
 | 대상 | 인바운드 허용 출처 |
 |------|------------------|
-| frontend | ingress-nginx |
-| backend | ingress-nginx, frontend, monitoring (Prometheus) |
-| ai-serving | ingress-nginx, backend, monitoring (Prometheus) |
+| frontend | traefik |
+| backend | traefik, frontend, monitoring (Prometheus) |
+| ai-serving | traefik, backend, monitoring (Prometheus) |
 | mysql | backend, storage (백업 CronJob) |
 | minio | backend, ai-serving, storage (백업 CronJob) |
 

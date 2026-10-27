@@ -1,0 +1,24 @@
+# MetalLB CRD가 먼저 설치된 뒤 적용되도록 sync-wave를 뒤로 두고, CRD가 없을 때 dry-run 실패를 건너뛴다
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  name: {{ .Values.ipAddressPool.name }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  addresses:
+    {{- toYaml .Values.ipAddressPool.addresses | nindent 4 }}
+---
+apiVersion: metallb.io/v1beta1
+kind: L2Advertisement
+metadata:
+  name: {{ .Values.ipAddressPool.name }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  ipAddressPools:
+    - {{ .Values.ipAddressPool.name }}

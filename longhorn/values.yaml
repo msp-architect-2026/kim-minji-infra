@@ -1,0 +1,30 @@
+# Longhorn 분산 블록 스토리지. 노드 사전 준비(open-iscsi, nfs-common)와 디스크 노드 라벨은 RUNBOOK 4장.
+longhorn:
+  # ArgoCD에서는 Helm pre-upgrade hook Job이 동작하지 않으므로 끈다 (Longhorn 공식 ArgoCD 가이드)
+  preUpgradeChecker:
+    jobEnabled: false
+
+  persistence:
+    # 기존 기본 StorageClass(local-path)는 그대로 둔다. mysql/minio는 storageClassName: longhorn을 명시해 쓴다
+    defaultClass: false
+    # Pod가 뜬 노드에 복제본을 하나 둔다 → dev(cp1만 켬)에서는 볼륨 데이터가 cp1에 있게 된다
+    defaultDataLocality: best-effort
+    reclaimPolicy: Retain
+
+  defaultSettings:
+    # node.longhorn.io/create-default-disk=true 라벨이 있는 노드(cp1, w1)에만 디스크를 만든다 → ai2에는 복제본이 생기지 않는다
+    createDefaultDiskLabeledNodes: true
+    defaultDataLocality: best-effort
+    # 노드가 꺼져(NotReady) 볼륨이 묶인 StatefulSet·Deployment Pod를 강제 삭제해 다른 노드에서 다시 뜨게 한다
+    nodeDownPodDeletionPolicy: delete-both-statefulset-and-deployment-pod
+
+  longhornUI:
+    replicas: 1
+
+  # 스토리지 제어면이라 limit은 두지 않고(OOM 시 볼륨 장애) requests만 둔다.
+  # instance-manager Pod는 Longhorn이 직접 만들며 CPU는 guaranteedInstanceManagerCPU(%)로 예약된다
+  longhornManager:
+    resources:
+      requests:
+        cpu: 50m
+        memory: 192Mi

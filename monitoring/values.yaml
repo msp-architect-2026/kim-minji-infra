@@ -11,7 +11,7 @@ kube-prometheus-stack:
     adminPassword: "admin1234"
     ingress:
       enabled: true
-      ingressClassName: nginx
+      ingressClassName: traefik
       hosts:
         - grafana.wafer.local
       paths:
