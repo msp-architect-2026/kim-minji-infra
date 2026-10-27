@@ -260,7 +260,7 @@ StatefulSet의 `volumeClaimTemplates`는 바꿀 수 없어 **삭제 후 재생�
 
 ### 4.9 MySQL 수동 failover (full 프로파일)
 
-primary(`mysql-mysql-0`)가 복구되지 않을 때 replica를 승격한다. **Service 전환은 Git으로 한다** — kubectl로 Service를 바꾸면 다음 auto-sync(예: CI 이미지 태그 커밋)가 되돌리고, 복제 설정 Job이 다시 돌아 혼란이 생긴다. (Application 설정은 ApplicationSet이 관리하므로 auto-sync를 kubectl로 꺼도 되돌아간다.)
+primary(`mysql-mysql-0`)가 복구되지 않을 때 replica를 승격한다. **Service 전환은 Git으로 한다** — kubectl로 Service를 바꾸면 selfHeal·다음 sync가 되돌리고, 복제 설정 Job이 다시 돌아 혼란이 생긴다. (자동 sync를 잠시 끄는 방법은 4.12)
 
 1. replica 승격 (bash에서):
    ```bash
@@ -314,10 +314,23 @@ mc cat ext/<bucket>/wafer/mysql/backup_<시각>.sql.gz | gunzip | sed '1{/999999
 
 모든 Application은 prune·selfHeal이 켜져 있어 kubectl로 바꾼 것은 곧 Git 상태로 되돌아간다. 데이터 이전처럼 잠시 수동 조작이 필요하면 해당 Application만 자동 sync를 끈다. ApplicationSet은 `spec.syncPolicy.automated`만은 되돌리지 않게 설정돼 있다(`ignoreApplicationDifferences`).
 
+**항목 7 적용 시 1회**: 항목 1 때 만들어진 앱 Application(mysql, minio, backend, ai-serving, frontend)은 `automated: {}`(prune·selfHeal 없음)로 남아 있고, ApplicationSet은 이 필드를 다시 덮어쓰지 않는다. 직접 켠다.
+
 ```bash
-# 끄기
+# 1) prune으로 지워질 리소스부터 확인 (예: dev인데 남아 있는 mysql-mysql-replica StatefulSet)
+for app in mysql minio backend ai-serving frontend; do argocd app diff $app; done
+# 2) prune·selfHeal 켜기
+for app in mysql minio backend ai-serving frontend; do
+  kubectl -n gitops patch application $app --type merge -p '{"spec":{"syncPolicy":{"automated":{"prune":true,"selfHeal":true}}}}'
+done
+```
+
+유지보수 때 끄고 켜는 방법 (대상 앱 목록은 작업에 맞게 바꾼다):
+
+```bash
+# 끄기 (이미 꺼져 있어도 오류 없음)
 for app in backend mysql minio; do
-  kubectl -n gitops patch application $app --type json -p '[{"op":"remove","path":"/spec/syncPolicy/automated"}]'
+  kubectl -n gitops patch application $app --type merge -p '{"spec":{"syncPolicy":{"automated":null}}}'
 done
 # 켜기 (작업 후 반드시)
 for app in backend mysql minio; do
@@ -455,7 +468,8 @@ printf '    slack-webhook-url: %s\n' "$(seal "$URL" gitops argocd-notifications-
 - [ ] (항목 6) ArgoCD Notifications: `kubectl -n gitops exec deploy/argocd-notifications-controller -- argocd admin notifications template notify app-sync-failed frontend --recipient slack-webhook` → Slack 수신
 - [ ] (항목 6) GitLab CI 실패 알림: 아무 브랜치에서 실패하는 커밋(예: infra의 Dockerfile 오타)을 푸시하거나 파이프라인을 수동 실패시켜 Slack 수신 확인
 - [ ] (항목 7) 이미지 태그 MR: 앱 레포 main 파이프라인 후 kim-minji-helm에 `ci/<chart>-<sha>` MR 생성 → 머지 → ArgoCD Synced, 새 이미지로 롤아웃. 레지스트리에 `latest` 태그가 새로 생기지 않음
-- [ ] (항목 7) selfHeal: `kubectl -n application scale deploy frontend-frontend --replicas=3` → 잠시 후 values 값으로 되돌아감
+- [ ] (항목 7) selfHeal (autoscaling을 끈 차트에서만): `kubectl -n application scale deploy frontend-frontend --replicas=3` → 잠시 후 values 값으로 되돌아감
+- [ ] (항목 7) `argocd app list`에서 모든 앱의 SYNC POLICY가 `Auto-Prune` (4.12의 1회 절차 적용 확인)
 - [ ] (항목 5) PDB: `kubectl get pdb -A` → frontend·backend(minAvailable 1), ai-serving(maxUnavailable 1), coredns, traefik
 - [ ] (항목 5) frontend·backend·traefik 2개가 cp1·w1에 하나씩, ai2에는 없음: `kubectl -n application get pod -o wide`, `kubectl -n traefik get pod -o wide` (ai2는 nodeAffinity로 제외)
 - [ ] (항목 5) drain 무중단 확인 (위 항목에서 w1에 frontend·backend가 있는 것을 먼저 확인): 맥에서 `while true; do curl -sk -o /dev/null -w '%{http_code}\n' https://app.wafer.local/; sleep 1; done`을 띄운 채 `kubectl drain k3s-w1 --ignore-daemonsets --delete-emptydir-data` → 200이 계속 나오는지, drain이 PDB 때문에 멈추지 않는지 → `kubectl uncordon k3s-w1`
@@ -474,8 +488,9 @@ printf '    slack-webhook-url: %s\n' "$(seal "$URL" gitops argocd-notifications-
      `kubectl delete ns traefik`, `kubectl delete ingressclass traefik`, `kubectl delete clusterrole,clusterrolebinding traefik-traefik`
   3. 기존 ingress-nginx 재설치 (NodePort 32088)
 - 스토리지 이전 롤백 (4.8 도중 문제): helm 레포의 `storageClassName`을 `""`로 되돌려 커밋 → 새 Longhorn PVC·StatefulSet 삭제 → sync(local-path로 재생성) → 2장 백업으로 복원. 3단계에서 보존한 옛 PV를 다시 쓰려면 PV의 `claimRef`를 지우고 같은 이름의 PVC가 그 PV를 지정하도록(`volumeName`) 만든다
-- MySQL replica 끄기: `env=dev` (또는 `mysql/values-full.yaml`의 `replication.enabled: false`) → apps 앱은 prune이 없어 replica StatefulSet이 남는다 → `kubectl -n storage delete sts mysql-mysql-replica` **와 PVC `data-mysql-mysql-replica-0`도 삭제**한다. PVC를 남겨 두면 binlog 보관 기간(3일)이 지난 뒤 full을 다시 켰을 때 replica가 따라잡지 못해(오류 1236) 설정 Job이 계속 실패한다
+- MySQL replica 끄기: `env=dev` (또는 `mysql/values-full.yaml`의 `replication.enabled: false`) → replica StatefulSet은 prune으로 삭제된다 (항목 7 이후). **PVC `data-mysql-mysql-replica-0`은 ArgoCD가 관리하지 않으므로 직접 삭제**한다. PVC를 남겨 두면 binlog 보관 기간(3일)이 지난 뒤 full을 다시 켰을 때 replica가 따라잡지 못해(오류 1236) 설정 Job이 계속 실패한다
 - PDB가 drain을 막을 때(예: 노드 1대만 남은 상태): 해당 Pod가 다른 노드에 Ready로 뜨기를 기다리거나, 급하면 `kubectl delete pdb <이름>` (다음 sync에서 다시 생성된다). full에서 노드를 2대 이상 끌 계획이면 먼저 `env=dev`로 바꾼다(4.3)
+- 이미지 태그 MR 운영: 같은 차트의 `ci/` MR이 여러 개 열려 있으면 **가장 최신 것만 머지**하고 나머지는 닫는다 (오래된 MR을 나중에 머지하면 이미지가 되돌아간다)
 - 배포 롤백: kim-minji-helm에서 해당 MR을 revert(또는 이전 SHA로 태그를 되돌리는 MR) → 머지 → ArgoCD가 이전 이미지로 롤아웃
 - 알림 참고:
   - Watchdog(상시 알림)은 Slack으로 보내지 않으므로 "알림 경로 자체가 죽은 것"은 감지하지 못한다. 6.2의 amtool 테스트로 주기적으로 확인한다
