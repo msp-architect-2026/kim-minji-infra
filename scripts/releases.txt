@@ -1,0 +1,8 @@
+# 차트디렉터리 릴리스명 네임스페이스 [skip-schema]  (ArgoCD Application과 같게 유지)
+# skip-schema: SSA 부분 패치처럼 단독으로는 스키마를 만족하지 않는 차트
+coredns         coredns         kube-system  skip-schema
+node-local-dns  node-local-dns  kube-system
+monitoring      monitoring      monitoring
+loki            loki            monitoring
+ingress         ingress         application
+network-policy  network-policy  default
