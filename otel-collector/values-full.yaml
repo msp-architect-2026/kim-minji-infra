@@ -1,0 +1,3 @@
+# full 프로파일: 트레이싱 켬
+opentelemetry-collector:
+  enabled: true

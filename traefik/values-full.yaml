@@ -25,3 +25,11 @@ traefik:
         matchLabels:
           app.kubernetes.io/name: traefik
           app.kubernetes.io/instance: traefik-traefik
+  # 진입점(Traefik)에서 trace를 시작해 backend·ai-serving으로 traceparent를 넘긴다
+  tracing:
+    serviceName: traefik
+    otlp:
+      enabled: true
+      http:
+        enabled: true
+        endpoint: http://otel-collector.monitoring.svc:4318/v1/traces

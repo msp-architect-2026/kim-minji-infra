@@ -1,0 +1,18 @@
+# Tempo (trace 저장소, single binary). OTel Collector가 OTLP gRPC(4317)로 보낸다
+tempo:
+  enabled: false
+  fullnameOverride: tempo
+  tempo:
+    retention: 48h
+    resources:
+      requests:
+        cpu: 50m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 768Mi
+    # 수신기는 차트 기본값(OTLP 4317/4318 포함)을 그대로 쓴다. Collector는 OTLP gRPC로만 보낸다
+  persistence:
+    enabled: true
+    storageClassName: longhorn
+    size: 5Gi

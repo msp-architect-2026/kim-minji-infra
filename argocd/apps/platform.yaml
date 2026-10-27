@@ -63,6 +63,13 @@ spec:
                 - chart: loki
                   namespace: monitoring
                   serverSideApply: "false"
+                # 항목 9: 트레이싱 (full에서만 렌더링, dev는 빈 Application)
+                - chart: tempo
+                  namespace: monitoring
+                  serverSideApply: "false"
+                - chart: otel-collector
+                  namespace: monitoring
+                  serverSideApply: "false"
                 # 항목 4: 개별 Application(backup/argocd-application.yaml)에서 Helm 차트로 전환
                 - chart: backup
                   namespace: storage

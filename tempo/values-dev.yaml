@@ -1,0 +1,3 @@
+# dev 프로파일: 트레이싱 끔
+tempo:
+  enabled: false
