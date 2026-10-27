@@ -1,0 +1,25 @@
+# KEDA: Prometheus 쿼리(요청 수 등)를 기준으로 ai-serving을 스케일링한다 (ScaledObject는 kim-minji-helm/ai-serving)
+# 기본 requests(구성요소마다 100m·100Mi)·limits(1 core·1000Mi)는 VM 환경에 과해 줄인다
+keda:
+  resources:
+    operator:
+      requests:
+        cpu: 25m
+        memory: 64Mi
+      limits:
+        cpu: 300m
+        memory: 256Mi
+    metricServer:
+      requests:
+        cpu: 25m
+        memory: 64Mi
+      limits:
+        cpu: 300m
+        memory: 256Mi
+    webhooks:
+      requests:
+        cpu: 10m
+        memory: 32Mi
+      limits:
+        cpu: 200m
+        memory: 128Mi

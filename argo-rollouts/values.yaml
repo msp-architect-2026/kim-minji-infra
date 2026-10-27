@@ -1,0 +1,17 @@
+# Argo Rollouts: ai-serving 카나리 배포 + Prometheus 자동 분석 (Rollout·AnalysisTemplate은 kim-minji-helm/ai-serving)
+argo-rollouts:
+  installCRDs: true
+  # Application을 지워도 CRD(와 Rollout 리소스)는 남긴다
+  keepCRDs: true
+  controller:
+    # 기본 2(리더 선출). VM 환경이라 1
+    replicas: 1
+    resources:
+      requests:
+        cpu: 25m
+        memory: 64Mi
+      limits:
+        cpu: 300m
+        memory: 256Mi
+  dashboard:
+    enabled: false
