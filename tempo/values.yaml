@@ -3,6 +3,8 @@ tempo:
   enabled: false
   fullnameOverride: tempo
   tempo:
+    # Grafana Labs로 사용량 통계를 보내지 않는다
+    reportingEnabled: false
     retention: 48h
     resources:
       requests:

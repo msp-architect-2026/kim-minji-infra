@@ -375,7 +375,8 @@ kubectl argo rollouts retry rollout ai-serving-ai-serving -n ai-serving
 **트레이싱 (full만)**: Traefik → backend(OTel Java agent) → ai-serving(opentelemetry-instrument) 순서로 trace가 이어지고, OTel Collector(`otel-collector.monitoring:4317/4318`)를 거쳐 Tempo(48시간, Longhorn 5Gi)에 저장된다. dev에서는 tempo·otel-collector Application이 비어 있고(Healthy), 앱 계측도 꺼진다(`OTEL_SDK_DISABLED`, agent 미주입).
 
 - Grafana → Explore → Tempo → Search에서 `service.name=traefik` 등으로 trace 조회. 한 trace에 traefik·backend·ai-serving span이 같이 있어야 한다
-- Grafana → Explore → Loki에서 backend 로그의 `[trace_id=...]`(ai-serving은 `trace_id=...`)를 누르면 Tempo trace로 이동한다
+- Grafana → Explore → Loki에서 backend 로그의 `[trace_id=...]`를 누르면 Tempo trace로 이동한다 (ai-serving은 `print()` 로그라 trace_id가 없다). 반대로 Tempo span에서 "Logs for this span"을 누르면 같은 서비스(`app` 라벨)의 해당 trace_id 로그를 찾는다
+- 프로브·메트릭 수집 요청 span은 Collector에서 버린다 (`filter/noise`)
 - trace가 안 보이면: Collector 로그(`kubectl -n monitoring logs deploy/otel-collector`), 앱 → monitoring 4317/4318 NetworkPolicy, backend Pod의 `JAVA_TOOL_OPTIONS`·initContainer 완료 여부
 
 **SLO**: 가용성 99.5%, backend p95 < 1초, AI(/predict) p95 < 3초. `slo-rules`가 창별(5m~1d) 오류율을 기록하고, 오류 예산 소진 속도로 알린다 (Fast: 1시간·5분 창 14.4배 → critical, Slow: 6시간·30분 창 6배 → warning). 기존 단순 비율·지연 알림(BackendHighErrorRate 등)은 이 알림으로 대체했다. Grafana 대시보드 **Wafer SLO**.
@@ -515,7 +516,7 @@ printf '    slack-webhook-url: %s\n' "$(seal "$URL" gitops argocd-notifications-
 - [ ] (항목 8) 스케일링: C21 부하 테스트 중 Pod가 늘었다가(최대 dev 2 / full 3) 부하가 끝나고 5분 뒤 줄어듦
 - [ ] (항목 8) 카나리: 새 태그 MR 머지 → `kubectl argo rollouts get rollout ...`에서 50% → 분석 Successful → 100%. 일부러 실패시키는 시험: 분석 중 `/predict`에 잘못된 요청을 반복해 5xx를 내면 Aborted·자동 롤백
 - [ ] (항목 8) 지연 히스토그램 버킷: Prometheus에서 `http_request_duration_seconds_bucket{handler="/predict"}`의 `le`에 2, 3, 5, 10이 보임 (ai 이미지가 새 버전일 때)
-- [ ] (항목 9, full) Tempo에서 한 trace에 traefik·backend·ai-serving span, Loki 로그 trace_id → Tempo 이동
+- [ ] (항목 9, full) Tempo에서 한 trace에 traefik·backend·ai-serving span, backend Loki 로그 trace_id → Tempo 이동, Tempo span → Logs for this span
 - [ ] (항목 9) Grafana **Wafer SLO** 대시보드에 4개 SLO 달성률·소진 속도·p95가 표시됨, Prometheus Rules에 `slo.recording`·`slo.alerts` 그룹
 - [ ] (항목 9, dev) tempo·otel-collector Application이 비어 있고 Healthy, backend Pod에 otel initContainer 없음
 - [ ] (항목 5) PDB: `kubectl get pdb -A` → frontend·backend(minAvailable 1), ai-serving(maxUnavailable 1), coredns, traefik

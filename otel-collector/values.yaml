@@ -30,15 +30,22 @@ opentelemetry-collector:
       prometheus: null
     exporters:
       debug: null
-      otlp/tempo:
+      otlp_grpc/tempo:
         endpoint: tempo.monitoring.svc:4317
         tls:
           insecure: true
+    processors:
+      # 프로브·메트릭 수집 요청 span은 버린다 (backend /actuator/*, ai-serving /health·/metrics)
+      filter/noise:
+        error_mode: ignore
+        traces:
+          span:
+            - 'IsMatch(attributes["url.path"], "^/(actuator|health$|metrics$)")'
     service:
       pipelines:
         traces:
           receivers: [otlp]
-          processors: [memory_limiter, batch]
-          exporters: [otlp/tempo]
+          processors: [memory_limiter, filter/noise, batch]
+          exporters: [otlp_grpc/tempo]
         metrics: null
         logs: null

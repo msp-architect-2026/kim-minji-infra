@@ -23,6 +23,7 @@ spec:
           labels:
             slo: {{ $sli.name }}
             service: {{ $sli.service }}
+            namespace: {{ $sli.namespace }}
         {{- end }}
         {{- end }}
     - name: slo.alerts
@@ -38,6 +39,7 @@ spec:
             severity: critical
             slo: {{ $sli.name }}
             service: {{ $sli.service }}
+            namespace: {{ $sli.namespace }}
           annotations:
             summary: "{{ $sli.description }} SLO 오류 예산 빠르게 소진 중 (1시간 창)"
             description: "1시간 오류율 {{`{{ $value | humanizePercentage }}`}} (목표 {{ mulf $sli.objective 100 }}%, 허용 {{ mulf $budget 100 }}%의 14.4배 초과)"
@@ -50,6 +52,7 @@ spec:
             severity: warning
             slo: {{ $sli.name }}
             service: {{ $sli.service }}
+            namespace: {{ $sli.namespace }}
           annotations:
             summary: "{{ $sli.description }} SLO 오류 예산 소진 중 (6시간 창)"
             description: "6시간 오류율 {{`{{ $value | humanizePercentage }}`}} (목표 {{ mulf $sli.objective 100 }}%)"

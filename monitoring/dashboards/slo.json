@@ -49,7 +49,7 @@
             "uid": "prometheus"
           },
           "refId": "A",
-          "expr": "1 - avg_over_time(slo:sli_error:ratio_rate1h{slo=\"backend-availability\"}[$__range])"
+          "expr": "1 - ((sum(rate(http_server_requests_seconds_count{job=\"backend-backend\",uri!~\"/actuator.*\",status=~\"5..\"}[$__range])) or vector(0))) / (sum(rate(http_server_requests_seconds_count{job=\"backend-backend\",uri!~\"/actuator.*\"}[$__range])))"
         }
       ],
       "fieldConfig": {
@@ -103,7 +103,7 @@
             "uid": "prometheus"
           },
           "refId": "A",
-          "expr": "1 - avg_over_time(slo:sli_error:ratio_rate1h{slo=\"backend-latency\"}[$__range])"
+          "expr": "1 - (sum(rate(http_server_requests_seconds_count{job=\"backend-backend\",uri!~\"/actuator.*\"}[$__range])) - sum(rate(http_server_requests_seconds_bucket{job=\"backend-backend\",uri!~\"/actuator.*\",le=\"1.0\"}[$__range]))) / (sum(rate(http_server_requests_seconds_count{job=\"backend-backend\",uri!~\"/actuator.*\"}[$__range])))"
         }
       ],
       "fieldConfig": {
@@ -157,7 +157,7 @@
             "uid": "prometheus"
           },
           "refId": "A",
-          "expr": "1 - avg_over_time(slo:sli_error:ratio_rate1h{slo=\"ai-availability\"}[$__range])"
+          "expr": "1 - ((sum(rate(http_requests_total{job=\"ai-serving-ai-serving\",handler=\"/predict\",status=\"5xx\"}[$__range])) or vector(0))) / (sum(rate(http_requests_total{job=\"ai-serving-ai-serving\",handler=\"/predict\"}[$__range])))"
         }
       ],
       "fieldConfig": {
@@ -211,7 +211,7 @@
             "uid": "prometheus"
           },
           "refId": "A",
-          "expr": "1 - avg_over_time(slo:sli_error:ratio_rate1h{slo=\"ai-latency\"}[$__range])"
+          "expr": "1 - (sum(rate(http_request_duration_seconds_count{job=\"ai-serving-ai-serving\",handler=\"/predict\"}[$__range])) - sum(rate(http_request_duration_seconds_bucket{job=\"ai-serving-ai-serving\",handler=\"/predict\",le=\"3.0\"}[$__range]))) / (sum(rate(http_request_duration_seconds_count{job=\"ai-serving-ai-serving\",handler=\"/predict\"}[$__range])))"
         }
       ],
       "fieldConfig": {
