@@ -6,7 +6,7 @@
   예) OUT=/tmp/r scripts/validate.sh dev && scripts/resource-summary.py --nodes 1 /tmp/r/dev
 
 계산 규칙:
-  - Deployment/StatefulSet: replicas × 컨테이너 requests 합 (HPA가 있으면 minReplicas, 최대치는 별도 열)
+  - Deployment/StatefulSet/Rollout: replicas × 컨테이너 requests 합 (HPA·KEDA ScaledObject가 있으면 최소, 최대치는 별도 열)
   - DaemonSet: --nodes(켜져 있는 노드 수) × 컨테이너 requests 합
   - Prometheus·Alertmanager(CR): spec.replicas(기본 1) × spec.resources.requests
   - requests가 없는 컨테이너는 0으로 세고 "미설정"으로 표시한다
@@ -18,7 +18,7 @@ import sys
 
 import yaml
 
-POD_KINDS = {"Deployment", "StatefulSet", "DaemonSet"}
+POD_KINDS = {"Deployment", "StatefulSet", "DaemonSet", "Rollout"}
 
 
 def cpu_m(v):
@@ -75,6 +75,10 @@ def main():
             ref = d["spec"]["scaleTargetRef"]
             # Helm 차트는 namespace를 비워 두는 경우가 많아 (kind, name)으로 맞춘다
             hpa[(ref["kind"], ref["name"])] = d["spec"]
+        elif d["kind"] == "ScaledObject":
+            ref, spec = d["spec"]["scaleTargetRef"], d["spec"]
+            hpa[(ref.get("kind", "Deployment"), ref["name"])] = {
+                "minReplicas": spec.get("minReplicaCount", 0), "maxReplicas": spec.get("maxReplicaCount", 100)}
 
     rows = []
     for release, d in docs:

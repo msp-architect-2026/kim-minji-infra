@@ -38,6 +38,13 @@ spec:
                 - chart: traefik
                   namespace: traefik
                   serverSideApply: "true"
+                # 항목 8: AI 서빙 스케일링·카나리
+                - chart: keda
+                  namespace: keda
+                  serverSideApply: "true"
+                - chart: argo-rollouts
+                  namespace: argo-rollouts
+                  serverSideApply: "true"
                 - chart: coredns
                   namespace: kube-system
                   serverSideApply: "true"

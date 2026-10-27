@@ -23,7 +23,7 @@
 | # | 항목 | 현재 값 (placeholder) | 위치 | 확인 방법 |
 |---|---|---|---|---|
 | C1 | k3s(Kubernetes) 버전 | `1.31.0` | `scripts/validate.sh` `K8S_VERSION` (helm, infra) | `kubectl version`. **Traefik 차트 42.x는 1.30 이상 필요**, Longhorn 1.12는 1.25 이상 |
-| C2 | ai-serving dev 메모리로 모델 로딩 가능 여부 | requests 250m/512Mi, limits 1000m/1Gi, HPA 1~2 | `kim-minji-helm/ai-serving/values-dev.yaml` | dev 배포 후 OOMKilled·readiness 실패 여부, `kubectl top pod -n ai-serving`. 부족하면 limit을 올리고 8장 표 갱신 |
+| C2 | ai-serving 메모리로 모델 로딩 가능 여부 | dev limits 1Gi(1~2개) / full limits 1.5Gi(1~3개) | `kim-minji-helm/ai-serving/values-dev.yaml`, `values-full.yaml` | dev 배포 후 OOMKilled·readiness 실패 여부, `kubectl top pod -n ai-serving`. 부족하면 limit을 올리고 8장 표 갱신 |
 | C3 | GitLab 이전 후 호스트 IP | repoURL은 `http://gitlab.local:8929/...` 유지, IP만 변경 | CoreDNS custom 설정(`gitlab.local` hosts, 현재 `192.168.0.157`) — 레포 밖 ConfigMap | 이전한 GitLab의 IP. 맥 호스트 컨테이너면 UTM 브리지에서 보이는 맥 IP |
 | C5 | 기존 ArgoCD Application 이름 (**ai-serving 주의**: backend values의 `AI_SERVER_URL`이 `kim-minji-ai-serving-ai-serving...`이라 현재 릴리스명이 `kim-minji-ai-serving`일 가능성이 높다. ApplicationSet은 `ai-serving` 릴리스로 Service `ai-serving-ai-serving`을 만들므로, 이름이 다르면 `AI_SERVER_URL`을 맞추거나 `releaseName`을 지정해야 backend→AI 호출이 된다. `kubectl -n ai-serving get svc`로 확인) | ApplicationSet이 차트명(`frontend`, `backend`, `ai-serving`, `mysql`, `minio`, `ingress`, `network-policy`, `coredns`, `node-local-dns`, `monitoring`, `loki`)으로 생성 | `argocd/apps/*.yaml` | `kubectl -n gitops get applications`. 이름이 다르면 4.1 절차에서 non-cascade 삭제. **앱 차트는 이름이 곧 Helm 릴리스명**이라, 다르면 리소스 이름·StatefulSet PVC가 새로 생겨 빈 DB/버킷으로 뜬다 → 해당 원소에 기존 릴리스명을 `releaseName`으로 지정하거나 2장 백업으로 데이터 이전 |
 | C6 | ArgoCD 버전 | `templatePatch`(v2.10+), `ignoreMissingValueFiles` 사용 | `argocd/apps/platform.yaml` | `argocd version` 또는 argocd-server 이미지 태그 |
@@ -41,7 +41,8 @@
 | C18 | ArgoCD Notifications 컨트롤러·기존 설정 | 설치 시 함께 깔렸다고 가정, `argocd-notifications-cm`/`-secret`을 이어받음 | `argocd-notifications/` 차트 | `kubectl -n gitops get deploy argocd-notifications-controller`. 없으면 ArgoCD 설치 매니페스트(설치 버전과 같은 것)로 컨트롤러만 추가. 기존 cm에 직접 넣은 설정이 있으면 차트 values로 옮긴다 |
 | C19 | 백업 이미지 태그 | `mysql-backup:latest` + `imagePullPolicy: Always` (infra CI는 이제 커밋 SHA 태그로만 빌드) | `backup/values.yaml` `image`, `imagePullPolicy` | `backup/Dockerfile`을 바꿔 infra 파이프라인이 `mysql-backup:<sha>`를 push하면 그 SHA로 바꾸고 `IfNotPresent`로 커밋. 그전까지는 기존 `latest` 이미지를 쓴다 |
 | C20 | GitLab `HELM_REPO_TOKEN` 권한 | ai·backend·frontend CI 변수 | 각 레포 `update-helm.sh` | kim-minji-helm에 push + MR 생성이 가능해야 한다: Personal/Project Access Token 범위 `api`, `write_repository` (기존 토큰이 `write_repository`만이면 MR 생성 단계에서 401/403) |
-| C12 | VM vCPU 수 | dev는 cp1 1대에 CPU requests ~2.0~2.3 core + instance-manager 예약(5%)이 몰린다 → **cp1 3 vCPU 이상** 권장. full instance-manager는 노드마다 8% | UTM 설정 | `kubectl describe node` Capacity·Allocated resources |
+| C21 | ai-serving Pod당 처리량 | KEDA 기준 Pod당 `/predict` 2 rps | `kim-minji-helm/ai-serving/values.yaml` `keda.requestsPerSecondPerPod` | 부하 테스트(예: `hey -z 2m -c 4 -m POST -T application/json -d '{"bucket_name":"wafer-images","object_key":"<키>"}' https://ai.wafer.local/predict`)로 p95가 1초를 넘기 시작하는 rps를 찾고 그 70~80%로 정한다 |
+| C12 | VM vCPU 수 | dev는 cp1 1대에 CPU requests ~2.1~2.4 core + instance-manager 예약(5%)이 몰린다 → **cp1 3 vCPU 이상** 권장. full instance-manager는 노드마다 8% | UTM 설정 | `kubectl describe node` Capacity·Allocated resources |
 
 ## 2. 사전 백업
 
@@ -342,6 +343,31 @@ done
 - ApplicationSet 템플릿의 `automated` 값을 Git에서 바꿔도 이미 만들어진 Application에는 반영되지 않는다 (같은 이유). 바꿨다면 위 '켜기' 명령으로 맞춘다
 - (항목 7 적용 시 1회) ai-serving Deployment에서 `replicas` 필드가 빠지면서 첫 sync 때 Pod 수가 잠깐 1로 돌아갔다가 HPA가 다시 조정한다
 
+### 4.13 ai-serving 카나리 배포 운영 (항목 8)
+
+ai-serving은 Argo Rollouts `Rollout`이다. 새 이미지 태그 MR이 머지되면 카나리 Pod를 더 띄워(50%) **카나리 Pod만** Prometheus로 분석하고(1분 뒤부터 1분 간격 3회: `/predict` 5xx 비율 < 5%, 카나리 Pod 수집 중), 통과하면 전체를 바꾼다. 실패하거나 카나리 Pod가 10분 안에 Ready가 안 되면(예: OOMKilled) 자동으로 이전 버전으로 돌아간다.
+
+**적용 순서 (항목 8, 1회)**: infra(keda, argo-rollouts 차트)를 먼저 머지·sync하고 `kubectl get crd rollouts.argoproj.io scaledobjects.keda.sh`와 두 Application Healthy를 확인한 **다음** helm(ai-serving) 변경을 머지한다. CRD가 없을 때 helm이 먼저 sync되면 retry(약 5분)가 끝난 뒤 수동 sync가 필요하다.
+
+```bash
+# 맥에 플러그인 설치
+brew install argoproj/tap/kubectl-argo-rollouts
+# 상태 보기
+kubectl argo rollouts get rollout ai-serving-ai-serving -n ai-serving --watch
+# 분석을 기다리지 않고 바로 승격 / 중단(이전 버전 유지) / 중단 후 다시 시도
+kubectl argo rollouts promote ai-serving-ai-serving -n ai-serving
+kubectl argo rollouts abort ai-serving-ai-serving -n ai-serving
+kubectl argo rollouts retry rollout ai-serving-ai-serving -n ai-serving
+```
+
+- 분석 기간 동안 트래픽이 없으면 에러 비율을 0으로 보아 통과한다. 의미 있는 판정을 하려면 배포 중 실제 요청이 들어와야 한다
+- 카나리 동안 Pod가 1개 더 뜬다(`maxSurge: 1`). full에서는 최대 4개 × 1.5Gi가 ai2에 잠시 몰릴 수 있다 (8장 합계에는 surge Pod 미포함: dev +250m·512Mi, full +500m·1Gi)
+- **full 첫 적용 전 C2 확인**: 첫 Rollout 생성은 카나리 없이 바로 100%라, limit 1.5Gi에서 모델이 OOM이면 정상 Pod가 남지 않는다
+- **전환 시 1회**: 기존 `Deployment`·`HorizontalPodAutoscaler`가 prune되고 `Rollout`·KEDA `ScaledObject`가 새로 생긴다. 새 Pod가 모델을 불러오는 동안(1~2분) ai-serving이 응답하지 않는다. 트래픽이 적은 시간에 머지한다
+- 카나리가 자동 중단되면 Rollout spec은 Git과 같아 ArgoCD는 **Synced / Degraded**로 남는다 (자동으로 다시 시도하지 않음) → 원인 수정 후 새 태그 MR, 같은 태그로 다시 시도하려면 `kubectl argo rollouts retry rollout ...`, 되돌리려면 이전 태그 MR
+- Prometheus 장애 시 KEDA의 요청 수 트리거가 오류가 되어 CPU 기준 확장만 되고 축소는 멈춘다 (Prometheus 복구 후 정상화)
+- 분석은 카나리 Pod 메트릭(`rollouts_pod_template_hash`)을 쓴다. 트래픽이 아주 적으면 5xx 한 건으로도 5%를 넘을 수 있다
+
 ## 5. 채워야 할 시크릿
 
 모든 값은 `kubeseal`로 암호화해 해당 values 파일의 placeholder 자리에 커밋한다. 평문 커밋 금지.
@@ -470,6 +496,10 @@ printf '    slack-webhook-url: %s\n' "$(seal "$URL" gitops argocd-notifications-
 - [ ] (항목 7) 이미지 태그 MR: 앱 레포 main 파이프라인 후 kim-minji-helm에 `ci/<chart>-<sha>` MR 생성 → 머지 → ArgoCD Synced, 새 이미지로 롤아웃. 레지스트리에 `latest` 태그가 새로 생기지 않음
 - [ ] (항목 7) selfHeal (autoscaling을 끈 차트에서만): `kubectl -n application scale deploy frontend-frontend --replicas=3` → 잠시 후 values 값으로 되돌아감
 - [ ] (항목 7) `argocd app list`에서 모든 앱의 SYNC POLICY가 `Auto-Prune` (4.12의 1회 절차 적용 확인)
+- [ ] (항목 8) KEDA: `kubectl -n ai-serving get scaledobject` READY·ACTIVE 확인, KEDA가 만든 HPA `keda-hpa-ai-serving-ai-serving` 존재, 기존 HPA는 삭제됨
+- [ ] (항목 8) 스케일링: C21 부하 테스트 중 Pod가 늘었다가(최대 dev 2 / full 3) 부하가 끝나고 5분 뒤 줄어듦
+- [ ] (항목 8) 카나리: 새 태그 MR 머지 → `kubectl argo rollouts get rollout ...`에서 50% → 분석 Successful → 100%. 일부러 실패시키는 시험: 분석 중 `/predict`에 잘못된 요청을 반복해 5xx를 내면 Aborted·자동 롤백
+- [ ] (항목 8) 지연 히스토그램 버킷: Prometheus에서 `http_request_duration_seconds_bucket{handler="/predict"}`의 `le`에 2, 3, 5, 10이 보임 (ai 이미지가 새 버전일 때)
 - [ ] (항목 5) PDB: `kubectl get pdb -A` → frontend·backend(minAvailable 1), ai-serving(maxUnavailable 1), coredns, traefik
 - [ ] (항목 5) frontend·backend·traefik 2개가 cp1·w1에 하나씩, ai2에는 없음: `kubectl -n application get pod -o wide`, `kubectl -n traefik get pod -o wide` (ai2는 nodeAffinity로 제외)
 - [ ] (항목 5) drain 무중단 확인 (위 항목에서 w1에 frontend·backend가 있는 것을 먼저 확인): 맥에서 `while true; do curl -sk -o /dev/null -w '%{http_code}\n' https://app.wafer.local/; sleep 1; done`을 띄운 채 `kubectl drain k3s-w1 --ignore-daemonsets --delete-emptydir-data` → 200이 계속 나오는지, drain이 PDB 때문에 멈추지 않는지 → `kubectl uncordon k3s-w1`
@@ -490,6 +520,7 @@ printf '    slack-webhook-url: %s\n' "$(seal "$URL" gitops argocd-notifications-
 - 스토리지 이전 롤백 (4.8 도중 문제): helm 레포의 `storageClassName`을 `""`로 되돌려 커밋 → 새 Longhorn PVC·StatefulSet 삭제 → sync(local-path로 재생성) → 2장 백업으로 복원. 3단계에서 보존한 옛 PV를 다시 쓰려면 PV의 `claimRef`를 지우고 같은 이름의 PVC가 그 PV를 지정하도록(`volumeName`) 만든다
 - MySQL replica 끄기: `env=dev` (또는 `mysql/values-full.yaml`의 `replication.enabled: false`) → replica StatefulSet은 prune으로 삭제된다 (항목 7 이후). **PVC `data-mysql-mysql-replica-0`은 ArgoCD가 관리하지 않으므로 직접 삭제**한다. PVC를 남겨 두면 binlog 보관 기간(3일)이 지난 뒤 full을 다시 켰을 때 replica가 따라잡지 못해(오류 1236) 설정 Job이 계속 실패한다
 - PDB가 drain을 막을 때(예: 노드 1대만 남은 상태): 해당 Pod가 다른 노드에 Ready로 뜨기를 기다리거나, 급하면 `kubectl delete pdb <이름>` (다음 sync에서 다시 생성된다). full에서 노드를 2대 이상 끌 계획이면 먼저 `env=dev`로 바꾼다(4.3)
+- 카나리 롤백: 진행 중이면 `kubectl argo rollouts abort` (이전 버전 유지). 이미 100%면 이전 태그로 되돌리는 MR. 카나리 자체를 끄려면 `rollout.enabled: false`(Deployment로 돌아가며 전환 시 1회 짧은 중단)
 - 이미지 태그 MR 운영: 같은 차트의 `ci/` MR이 여러 개 열려 있으면 **가장 최신 것만 머지**하고 나머지는 닫는다 (오래된 MR을 나중에 머지하면 이미지가 되돌아간다)
 - 배포 롤백: kim-minji-helm에서 해당 MR을 revert(또는 이전 SHA로 태그를 되돌리는 MR) → 머지 → ArgoCD가 이전 이미지로 롤아웃
 - 알림 참고:
@@ -501,7 +532,7 @@ printf '    slack-webhook-url: %s\n' "$(seal "$URL" gitops argocd-notifications-
 - HTTPS 리다이렉트 롤백: `traefik/values.yaml`의 `ports.web.http.redirections` 제거 커밋 (TLS 인증서는 그대로 두어도 무방)
 - k3s 설정 롤백: `/etc/rancher/k3s/config.yaml`의 `disable` 항목 제거 후 `systemctl restart k3s`
 
-작성 예정 (항목 8~9). 원칙:
+작성 예정 (항목 9). 원칙:
 
 - 코드 롤백은 Git revert → ArgoCD sync
 - 프로파일 전환 롤백은 클러스터 Secret의 `env` 라벨을 이전 값으로 되돌린다
@@ -518,16 +549,16 @@ scripts/resource-summary.py --nodes 1 /tmp/r-infra/dev /tmp/r-helm/dev
 scripts/resource-summary.py --nodes 3 /tmp/r-infra/full /tmp/r-helm/full
 ```
 
-### 8.1 요약 (항목 6 기준, 2026-10-26)
+### 8.1 요약 (항목 8 기준, 2026-10-27)
 
 | 구분 | dev (cp1 1대) CPU | dev 메모리 | full (3대) CPU | full 메모리 |
 |---|---|---|---|---|
-| 레포 워크로드 requests | 1660m | 3.31Gi | 3175m | 6.38Gi |
-| 레포 워크로드 (HPA 최대치) | 1910m | 3.81Gi | 4675m | 9.38Gi |
+| 레포 워크로드 requests | 1745m | 3.53Gi | 3260m | 6.59Gi |
+| 레포 워크로드 (HPA 최대치) | 1995m | 4.03Gi | 4260m | 8.59Gi |
 | 레포 밖·동적 생성 구성요소 (추정, C8) | ~0.4 core | ~1.5Gi | ~1.2 core | ~2.2Gi |
 | k3s 프로세스·OS (추정) | — | ~1.0Gi | — | ~2.2Gi (server 1.0 + agent 0.6×2) |
-| **합계 (HPA 최소)** | **~2.1 core** | **~5.8Gi** | **~4.4 core** | **~10.8Gi** |
-| **합계 (HPA 최대)** | **~2.3 core** | **~6.3Gi** | **~5.9 core** | **~13.8Gi** |
+| **합계 (HPA 최소)** | **~2.1 core** | **~6.0Gi** | **~4.5 core** | **~11.0Gi** |
+| **합계 (HPA 최대)** | **~2.4 core** | **~6.5Gi** | **~5.5 core** | **~13.0Gi** |
 
 레포 밖·동적 생성 구성요소 추정(실제 사용량 기준):
 - ArgoCD ~800Mi, k3s 내장 coredns 70Mi(100m)·metrics-server 70Mi(100m)·local-path 20Mi (full은 coredns 2개분)
@@ -543,26 +574,30 @@ scripts/resource-summary.py --nodes 3 /tmp/r-infra/full /tmp/r-helm/full
 | **VM 3대에 쓸 수 있는 양** | **~22GB** |
 | 제안 배분 | cp1 8GB / w1 7GB / ai2 7GB |
 
-- dev: 모든 Pod가 cp1에 몰린다. 메모리 ~6.3Gi(HPA 최대) < cp1 8GB → 여유 ~1.7GB. **CPU requests ~2.3 core → cp1은 3 vCPU 이상 필요 (C12)**, 2 vCPU면 메모리가 남아도 CPU 부족으로 Pending. 이후 항목(Alertmanager 등)이 더해지면 cp1을 9GB로 늘리고 ai2를 6GB로 줄이는 안을 검토한다.
-- full: 합계 ~10.8Gi(HPA 최소) / ~13.8Gi(최대) < 22GB. (항목 4: MySQL replica 200m·512Mi, 항목 6: Alertmanager 25m·64Mi 추가)
+- dev: 모든 Pod가 cp1에 몰린다. 메모리 ~6.5Gi(HPA 최대) < cp1 8GB → 여유 ~1.5GB. 남은 항목(9: 관측성)은 dev에서 Tempo/OTel을 끄므로 크게 늘지 않는다. **CPU requests ~2.4 core(HPA 최대) → cp1은 3 vCPU 이상 필요 (C12)**, 2 vCPU면 메모리가 남아도 CPU 부족으로 Pending. 이후 항목(Alertmanager 등)이 더해지면 cp1을 9GB로 늘리고 ai2를 6GB로 줄이는 안을 검토한다.
+- full: 합계 ~11.0Gi(HPA 최소) / ~13.0Gi(최대) < 22GB. (항목 4: MySQL replica, 항목 6: Alertmanager, 항목 8: KEDA·Argo Rollouts 추가, ai-serving 최대 4 → 3)
 - 백업·복원 검증·복제 설정 Job은 실행될 때만 잠깐 뜨므로 합계에 넣지 않았다 (백업 이미지 기준 수십~수백 MiB).
-- **주의 (full)**: ai-serving은 ai2 고정이라 HPA 4개면 ai2에 requests 4Gi, **limits 12Gi(3Gi×4)** 가 몰린다. ai2 7GB에서는 limits 기준 과다 할당이다. 항목 8(AI 서빙)에서 maxReplicas 또는 limit 조정을 검토한다.
+- full ai-serving (항목 8에서 조정): ai2에 최대 3개 × requests 1Gi / limits 1.5Gi = limits 4.5Gi (카나리 중 +1개면 6Gi) < ai2 7GB.
 
 ### 8.3 워크로드별 상세
 
-`(미설정 포함)`은 requests가 없는 컨테이너(sidecar 등)가 있다는 뜻이다. coredns는 k3s가 관리해 렌더링 결과에 requests가 없다.
+`(미설정 포함)`은 requests가 없는 컨테이너(sidecar 등)가 있다는 뜻이다. coredns는 k3s가 관리해 렌더링 결과에 requests가 없다. ai-serving의 Pod 수 범위는 KEDA ScaledObject의 min~max.
 
 dev (`--nodes 1`):
 
 | 릴리스 | 종류 | 이름 | Pod 수 (최대) | requests/Pod (CPU · 메모리) | 합계 CPU | 합계 메모리 |
 |---|---|---|---|---|---|---|
-| ai-serving | Deployment | ai-serving-ai-serving | 1 (2) | 250m · 512Mi | 250m | 512Mi |
+| ai-serving | Rollout | ai-serving-ai-serving | 1 (2) | 250m · 512Mi | 250m | 512Mi |
+| argo-rollouts | Deployment | argo-rollouts | 1 | 25m · 64Mi | 25m | 64Mi |
 | backend | Deployment | backend-backend | 1 | 250m · 512Mi | 250m | 512Mi |
 | cert-manager | Deployment | cert-manager | 1 | 25m · 64Mi | 25m | 64Mi |
 | cert-manager | Deployment | cert-manager-cainjector | 1 | 10m · 64Mi | 10m | 64Mi |
 | cert-manager | Deployment | cert-manager-webhook | 1 | 10m · 32Mi | 10m | 32Mi |
 | coredns | Deployment | coredns | 1 | 0m · 0Mi (k3s 관리, 실제 100m · 70Mi) | 0m | 0Mi |
 | frontend | Deployment | frontend-frontend | 1 | 100m · 128Mi | 100m | 128Mi |
+| keda | Deployment | keda-admission-webhooks | 1 | 10m · 32Mi | 10m | 32Mi |
+| keda | Deployment | keda-operator | 1 | 25m · 64Mi | 25m | 64Mi |
+| keda | Deployment | keda-operator-metrics-apiserver | 1 | 25m · 64Mi | 25m | 64Mi |
 | loki | DaemonSet | loki-promtail | 1 | 25m · 64Mi | 25m | 64Mi |
 | loki | StatefulSet | loki | 1 | 50m · 128Mi | 50m | 128Mi |
 | longhorn | DaemonSet | longhorn-manager | 1 | 50m · 192Mi (미설정 포함) | 50m | 192Mi |
@@ -581,20 +616,24 @@ dev (`--nodes 1`):
 | node-local-dns | DaemonSet | node-local-dns | 1 | 100m · 64Mi | 100m | 64Mi |
 | sealed-secrets | Deployment | sealed-secrets-controller | 1 | 25m · 64Mi | 25m | 64Mi |
 | traefik | Deployment | traefik | 1 | 50m · 64Mi | 50m | 64Mi |
-| **합계** | | | | | **1660m** | **3.31Gi** |
-| **HPA 최대치 기준** | | | | | **1910m** | **3.81Gi** |
+| **합계** | | | | | **1745m** | **3.53Gi** |
+| **HPA 최대치 기준** | | | | | **1995m** | **4.03Gi** |
 
 full (`--nodes 3`):
 
 | 릴리스 | 종류 | 이름 | Pod 수 (최대) | requests/Pod (CPU · 메모리) | 합계 CPU | 합계 메모리 |
 |---|---|---|---|---|---|---|
-| ai-serving | Deployment | ai-serving-ai-serving | 1 (4) | 500m · 1024Mi | 500m | 1024Mi |
+| ai-serving | Rollout | ai-serving-ai-serving | 1 (3) | 500m · 1024Mi | 500m | 1024Mi |
+| argo-rollouts | Deployment | argo-rollouts | 1 | 25m · 64Mi | 25m | 64Mi |
 | backend | Deployment | backend-backend | 2 | 250m · 512Mi | 500m | 1024Mi |
 | cert-manager | Deployment | cert-manager | 1 | 25m · 64Mi | 25m | 64Mi |
 | cert-manager | Deployment | cert-manager-cainjector | 1 | 10m · 64Mi | 10m | 64Mi |
 | cert-manager | Deployment | cert-manager-webhook | 1 | 10m · 32Mi | 10m | 32Mi |
 | coredns | Deployment | coredns | 2 | 0m · 0Mi (k3s 관리, 실제 100m · 70Mi) | 0m | 0Mi |
 | frontend | Deployment | frontend-frontend | 2 | 100m · 128Mi | 200m | 256Mi |
+| keda | Deployment | keda-admission-webhooks | 1 | 10m · 32Mi | 10m | 32Mi |
+| keda | Deployment | keda-operator | 1 | 25m · 64Mi | 25m | 64Mi |
+| keda | Deployment | keda-operator-metrics-apiserver | 1 | 25m · 64Mi | 25m | 64Mi |
 | loki | DaemonSet | loki-promtail | 3 | 50m · 128Mi | 150m | 384Mi |
 | loki | StatefulSet | loki | 1 | 100m · 256Mi | 100m | 256Mi |
 | longhorn | DaemonSet | longhorn-manager | 3 | 50m · 192Mi (미설정 포함) | 150m | 576Mi |
@@ -614,7 +653,7 @@ full (`--nodes 3`):
 | node-local-dns | DaemonSet | node-local-dns | 3 | 100m · 64Mi | 300m | 192Mi |
 | sealed-secrets | Deployment | sealed-secrets-controller | 1 | 25m · 64Mi | 25m | 64Mi |
 | traefik | Deployment | traefik | 2 | 50m · 64Mi | 100m | 128Mi |
-| **합계** | | | | | **3175m** | **6.38Gi** |
-| **HPA 최대치 기준** | | | | | **4675m** | **9.38Gi** |
+| **합계** | | | | | **3260m** | **6.59Gi** |
+| **HPA 최대치 기준** | | | | | **4260m** | **8.59Gi** |
 
-> 이후 항목(KEDA, Tempo/OTel 등)이 추가될 때마다 이 표를 갱신한다.
+> 항목 9(Tempo/OTel 등)가 추가되면 이 표를 갱신한다.

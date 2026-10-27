@@ -59,6 +59,8 @@ spec:
           selfHeal: true
         syncOptions:
           - CreateNamespace=true
+          # 새 리소스를 먼저 만들고 지울 리소스는 마지막에 (예: ai-serving Deployment → Rollout 전환 시 공백 축소)
+          - PruneLast=true
         retry:
           limit: 5
           backoff:

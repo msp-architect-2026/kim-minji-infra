@@ -71,7 +71,7 @@ spec:
             summary: AI 추론(/predict) 에러 비율이 {{ mulf .Values.alertRules.errorRatio 100 }}%를 넘음
             description: "현재 {{`{{ $value | humanizePercentage }}`}}"
         - alert: AIInferenceSlow
-          # instrumentator 기본 버킷(0.1, 0.5, 1, +Inf)이라 p95를 1초 이상으로는 구분할 수 없다 → 1초 넘는 요청 비율로 판단
+          # 1초 넘는 요청 비율로 판단 (ai 앱 버킷 확장 전 이미지에서도 동작하도록 le="1.0" 기준 유지)
           expr: |
             1 - (
               sum by (namespace) (rate(http_request_duration_seconds_bucket{job="{{ .Values.alertRules.aiJob }}",handler="/predict",le="1.0"}[5m]))

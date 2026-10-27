@@ -5,6 +5,8 @@ metallb         metallb         metallb-system
 cert-manager    cert-manager    cert-manager
 longhorn        longhorn        longhorn-system
 traefik         traefik         traefik
+keda            keda            keda
+argo-rollouts   argo-rollouts   argo-rollouts
 coredns         coredns         kube-system  skip-schema
 node-local-dns  node-local-dns  kube-system
 monitoring      monitoring      monitoring
