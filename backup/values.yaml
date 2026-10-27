@@ -1,5 +1,7 @@
-# 백업 도구 이미지 (debian + mariadb-client + mc, backup/Dockerfile → infra CI가 빌드)
+# 백업 도구 이미지 (debian + mariadb-client + mc, backup/Dockerfile → infra CI가 커밋 SHA 태그로 빌드)
+# Dockerfile을 바꿔 새 이미지가 빌드되면 이 태그를 그 SHA로 바꾸는 PR을 올린다 (RUNBOOK C19)
 image: gitlab.local:5050/root/kim-minji-infra/mysql-backup:latest
+imagePullPolicy: Always  # SHA 태그로 바꾼 뒤에는 IfNotPresent
 
 schedule:
   mysql: "0 2 * * *"

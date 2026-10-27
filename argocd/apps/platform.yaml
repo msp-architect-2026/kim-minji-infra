@@ -11,6 +11,10 @@ spec:
   syncPolicy:
     # ApplicationSet을 지워도 이미 배포된 리소스는 남긴다
     preserveResourcesOnDeletion: true
+  # 유지보수(RUNBOOK 4.12) 때 Application의 자동 sync를 kubectl로 잠시 끌 수 있게, 이 필드만은 ApplicationSet이 되돌리지 않는다
+  ignoreApplicationDifferences:
+    - jsonPointers:
+        - /spec/syncPolicy/automated
   generators:
     # 주의: clusters 생성기도 .name(클러스터 이름)을 내보내고 matrix에서 우선한다. 차트 이름은 .chart로 쓴다.
     - matrix:

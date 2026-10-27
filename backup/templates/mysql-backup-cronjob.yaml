@@ -21,7 +21,7 @@ spec:
           containers:
           - name: mysql-backup
             image: {{ .Values.image }}
-            imagePullPolicy: Always
+            imagePullPolicy: {{ .Values.imagePullPolicy }}
             command:
             - /bin/bash
             - -c
