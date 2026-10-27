@@ -1,0 +1,12 @@
+# dev 프로파일: 노드 1~2대만 켠 개발 환경 — Prometheus 보존기간·resource 최소
+kube-prometheus-stack:
+  prometheus:
+    prometheusSpec:
+      retention: 2d
+      resources:
+        requests:
+          cpu: 100m
+          memory: 256Mi
+        limits:
+          cpu: 300m
+          memory: 768Mi

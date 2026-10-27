@@ -1,2 +1,6 @@
 # k3s 기본 CoreDNS는 replicas를 지정하지 않아 1개로 뜬다
 replicaCount: 2
+
+topologySpread:
+  # DoNotSchedule: 노드가 1대뿐이면 두 번째 replica가 Pending. dev는 ScheduleAnyway로 덮어쓴다
+  whenUnsatisfiable: DoNotSchedule

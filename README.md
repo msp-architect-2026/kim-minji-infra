@@ -62,8 +62,25 @@ kim-minji-infra/
 ├── network-policy/   # Calico NetworkPolicy (네임스페이스 간 접근 제어)
 ├── coredns/          # CoreDNS replica 2 + 노드 분산 배치 (k3s 기본 Deployment에 SSA 패치)
 ├── node-local-dns/   # NodeLocal DNSCache DaemonSet
-└── argocd/           # ArgoCD Application 매니페스트
+├── argocd/
+│   ├── bootstrap/    # root App of Apps, in-cluster 클러스터 Secret(env 라벨) — 최초 1회 수동 적용
+│   └── apps/         # ApplicationSet: platform(이 레포 차트), apps(kim-minji-helm 차트)
+├── scripts/          # validate.sh(정적 검증), resource-summary.py(requests 합계)
+└── docs/RUNBOOK.md   # 클러스터 작업 절차
 ```
+
+---
+
+## ▍프로파일 (dev / full)
+
+| 프로파일 | 용도 | 주요 차이 |
+|----------|------|-----------|
+| `dev` (기본) | 노드 1~2대만 켠 개발 환경 | CoreDNS replica 1·ScheduleAnyway, Prometheus 보존 2d·resource 최소, Loki resource 최소 |
+| `full` | 3노드 To-Be | CoreDNS replica 2·DoNotSchedule, Prometheus 보존 7d |
+
+- 차트마다 `values.yaml`(공통) + `values-dev.yaml` / `values-full.yaml`(있을 때만)을 겹쳐 씁니다.
+- ApplicationSet은 in-cluster 클러스터 Secret의 `env` 라벨로 프로파일을 고릅니다. Secret이나 라벨이 없으면 `dev`입니다.
+- 전환 절차와 프로파일별 resource 합계는 [`docs/RUNBOOK.md`](docs/RUNBOOK.md) 4.3, 8장을 참고합니다.
 
 ---
 
@@ -144,14 +161,14 @@ monitoring 네임스페이스
 ## ▍ArgoCD syncPolicy
 
 ```yaml
-# ingress, monitoring, loki, backup, network-policy
+# platform ApplicationSet(coredns, node-local-dns, network-policy, ingress, monitoring, loki), backup
 syncPolicy:
   automated:
     prune: true       # 불필요한 리소스 자동 삭제
     selfHeal: true    # 수동 변경 감지 시 자동 복구
   syncOptions:
     - CreateNamespace=true
-    - ServerSideApply=true  # monitoring: CRD 크기 문제 대응
+    - ServerSideApply=true  # coredns(부분 패치), monitoring(CRD 크기) — templatePatch로 적용
 ```
 
 인프라 리소스는 Git 상태를 더 엄격하게 강제합니다.

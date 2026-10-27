@@ -1,0 +1,55 @@
+# 애플리케이션(kim-minji-helm 차트)을 프로파일별로 배포한다.
+# 프로파일 선택 규칙은 platform.yaml과 같다 (env 라벨, 기본 dev).
+# 릴리스명 = 차트명이라 Service 이름(frontend-frontend, mysql-mysql 등)은 기존과 같다.
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: apps
+  namespace: gitops
+spec:
+  goTemplate: true
+  syncPolicy:
+    preserveResourcesOnDeletion: true
+  generators:
+    # 주의: clusters 생성기도 .name(클러스터 이름)을 내보내고 matrix에서 우선한다. 차트 이름은 .chart로 쓴다.
+    - matrix:
+        generators:
+          - clusters: {}
+          - list:
+              elements:
+                - chart: mysql
+                  namespace: storage
+                - chart: minio
+                  namespace: storage
+                - chart: backend
+                  namespace: application
+                - chart: ai-serving
+                  namespace: ai-serving
+                - chart: frontend
+                  namespace: application
+  template:
+    metadata:
+      name: '{{ .chart }}'
+      namespace: gitops
+      labels:
+        app.kubernetes.io/part-of: apps
+    spec:
+      project: default
+      source:
+        repoURL: http://gitlab.local:8929/root/kim-minji-helm.git
+        targetRevision: HEAD
+        path: '{{ .chart }}'
+        helm:
+          releaseName: '{{ .chart }}'
+          ignoreMissingValueFiles: true
+          valueFiles:
+            - values.yaml
+            - 'values-{{ with .metadata }}{{ with .labels }}{{ with .env }}{{ . }}{{ else }}dev{{ end }}{{ else }}dev{{ end }}{{ else }}dev{{ end }}.yaml'
+      destination:
+        server: '{{ .server }}'
+        namespace: '{{ .namespace }}'
+      # 앱은 auto-sync만 (prune/selfHeal 정책은 GitOps 항목에서 재검토)
+      syncPolicy:
+        automated: {}
+        syncOptions:
+          - CreateNamespace=true

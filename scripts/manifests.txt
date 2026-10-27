@@ -1,6 +1,3 @@
 # Helm 차트가 아닌 raw 매니페스트 (yamllint + kubeconform)
 backup
-coredns/application.yaml
-loki/application.yaml
-monitoring/application.yaml
-node-local-dns/application.yaml
+argocd
