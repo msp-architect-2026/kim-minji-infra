@@ -3,8 +3,19 @@ kind: Ingress
 metadata:
   name: wafer-app-ingress
   namespace: application
+  {{- if .Values.tls.enabled }}
+  annotations:
+    cert-manager.io/cluster-issuer: {{ .Values.tls.clusterIssuer }}
+  {{- end }}
 spec:
   ingressClassName: {{ .Values.ingressClassName }}
+  {{- if .Values.tls.enabled }}
+  tls:
+    - secretName: wafer-app-ingress-tls
+      hosts:
+        - {{ .Values.ingress.app.host }}
+        - {{ .Values.ingress.api.host }}
+  {{- end }}
   rules:
     - host: {{ .Values.ingress.app.host }}
       http:
@@ -32,8 +43,18 @@ kind: Ingress
 metadata:
   name: wafer-ai-ingress
   namespace: ai-serving
+  {{- if .Values.tls.enabled }}
+  annotations:
+    cert-manager.io/cluster-issuer: {{ .Values.tls.clusterIssuer }}
+  {{- end }}
 spec:
   ingressClassName: {{ .Values.ingressClassName }}
+  {{- if .Values.tls.enabled }}
+  tls:
+    - secretName: wafer-ai-ingress-tls
+      hosts:
+        - {{ .Values.ingress.ai.host }}
+  {{- end }}
   rules:
     - host: {{ .Values.ingress.ai.host }}
       http:

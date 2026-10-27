@@ -2,3 +2,9 @@
 
 # Ingress 컨트롤러(Traefik)가 뜨는 네임스페이스. 앱으로 들어오는 외부 트래픽은 여기서만 허용한다
 ingressControllerNamespace: traefik
+
+# 기본 차단(ingress+egress) + DNS egress 허용을 적용할 네임스페이스
+defaultDenyNamespaces:
+  - application
+  - ai-serving
+  - storage

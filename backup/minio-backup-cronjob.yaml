@@ -9,6 +9,8 @@ spec:
   failedJobsHistoryLimit: 1
   jobTemplate:
     spec:
+      # 계정 오류 등은 재시도해도 같으므로 빨리 실패로 드러나게 한다
+      backoffLimit: 2
       template:
         spec:
           containers:
@@ -19,11 +21,25 @@ spec:
             - /bin/sh
             - -c
             - |
+              set -eu
               echo "MinIO 백업 시작"
-              mc alias set local http://minio-minio.storage.svc.cluster.local:9000 minioadmin minioadmin123
+              # 자격 증명을 명령행 인자 대신 환경변수(MC_HOST_<alias>)로 넘긴다 (ps에 노출 방지). 키에 @ : / 가 있으면 URL 인코딩 필요
+              export MC_HOST_local="http://${MINIO_ACCESS_KEY}:${MINIO_SECRET_KEY}@minio-minio.storage.svc.cluster.local:9000"
               mc mirror local/wafer-images local/wafer-backup/wafer-images
               mc mirror local/wafer-model local/wafer-backup/wafer-model
               echo "MinIO 백업 완료"
+            env:
+            # 계정 정보는 같은 storage 네임스페이스의 minio-secret(SealedSecret으로 관리)에서 읽는다
+            - name: MINIO_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: minio-secret
+                  key: accessKey
+            - name: MINIO_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: minio-secret
+                  key: secretKey
           imagePullSecrets:
           - name: gitlab-registry-secret
           restartPolicy: OnFailure

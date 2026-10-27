@@ -1,6 +1,11 @@
 # Ingress 컨트롤러: Traefik (ingress-nginx 유지보수 종료로 교체)
 ingressClassName: traefik
 
+# cert-manager(사설 CA wafer-ca)가 호스트별 TLS 인증서를 발급한다. HTTP→HTTPS 리다이렉트는 traefik 차트에서 한다
+tls:
+  enabled: true
+  clusterIssuer: wafer-ca
+
 ingress:
   app:
     host: app.wafer.local
