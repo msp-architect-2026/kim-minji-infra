@@ -52,10 +52,33 @@ kube-prometheus-stack:
 
     additionalDataSources:
       - name: Loki
+        uid: loki
         type: loki
         url: http://loki.monitoring.svc.cluster.local:3100
         access: proxy
         isDefault: false
+        jsonData:
+          # 로그의 trace_id(backend: [trace_id=...], ai-serving: trace_id=...)를 눌러 Tempo trace로 이동
+          derivedFields:
+            - name: TraceID
+              matcherRegex: "trace_id=(\\w+)"
+              url: "$${__value.raw}"
+              datasourceUid: tempo
+      # full 프로파일에서만 데이터가 있다 (dev는 Tempo 미설치 → 조회 시 연결 오류)
+      - name: Tempo
+        uid: tempo
+        type: tempo
+        url: http://tempo.monitoring.svc.cluster.local:3200
+        access: proxy
+        isDefault: false
+        jsonData:
+          tracesToLogsV2:
+            datasourceUid: loki
+            filterByTraceID: true
+            spanStartTimeShift: -5m
+            spanEndTimeShift: 5m
+          serviceMap:
+            datasourceUid: prometheus
 
     dashboardProviders:
       dashboardproviders.yaml:
@@ -843,3 +866,35 @@ alertRules:
   backendLatencySeconds: 1
   aiSlowRatio: 0.1
   backupMaxAgeHours: 26
+
+# SLO (templates/slo-rules.yaml, 대시보드 templates/slo-dashboard.yaml). objective = 좋은 이벤트 비율 목표
+#  - 가용성 99.5%: 5xx가 아닌 응답 비율
+#  - 지연: "p95 < N초" = 요청의 95%가 N초 이내 (히스토그램 버킷 le=N 기준, backend 1초 / AI 3초)
+# WINDOW는 기록 규칙의 창(5m, 30m, 1h, 6h, 1d)으로 바뀐다
+slo:
+  slis:
+    - name: backend-availability
+      service: backend
+      description: backend 가용성
+      objective: 0.995
+      bad: sum(rate(http_server_requests_seconds_count{job="backend-backend",uri!~"/actuator.*",status=~"5.."}[WINDOW]))
+      total: sum(rate(http_server_requests_seconds_count{job="backend-backend",uri!~"/actuator.*"}[WINDOW]))
+    - name: backend-latency
+      service: backend
+      description: backend 지연(p95 < 1초)
+      objective: 0.95
+      bad: sum(rate(http_server_requests_seconds_count{job="backend-backend",uri!~"/actuator.*"}[WINDOW])) - sum(rate(http_server_requests_seconds_bucket{job="backend-backend",uri!~"/actuator.*",le="1.0"}[WINDOW]))
+      total: sum(rate(http_server_requests_seconds_count{job="backend-backend",uri!~"/actuator.*"}[WINDOW]))
+    - name: ai-availability
+      service: ai-serving
+      description: AI 추론(/predict) 가용성
+      objective: 0.995
+      bad: sum(rate(http_requests_total{job="ai-serving-ai-serving",handler="/predict",status="5xx"}[WINDOW]))
+      total: sum(rate(http_requests_total{job="ai-serving-ai-serving",handler="/predict"}[WINDOW]))
+    - name: ai-latency
+      service: ai-serving
+      description: AI 추론(/predict) 지연(p95 < 3초)
+      objective: 0.95
+      bad: sum(rate(http_request_duration_seconds_count{job="ai-serving-ai-serving",handler="/predict"}[WINDOW])) - sum(rate(http_request_duration_seconds_bucket{job="ai-serving-ai-serving",handler="/predict",le="3.0"}[WINDOW]))
+      total: sum(rate(http_request_duration_seconds_count{job="ai-serving-ai-serving",handler="/predict"}[WINDOW]))
+
