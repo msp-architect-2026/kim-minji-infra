@@ -12,7 +12,7 @@ build-backup-image:
     - /kaniko/executor
       --context ${CI_PROJECT_DIR}/backup
       --dockerfile ${CI_PROJECT_DIR}/backup/Dockerfile
-      --destination gitlab.local:5050/${CI_PROJECT_PATH}/mysql-backup:latest
+      --destination gitlab.local:5050/${CI_PROJECT_PATH}/mysql-backup:${CI_COMMIT_SHORT_SHA}
   only:
     changes:
       - backup/Dockerfile

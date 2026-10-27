@@ -22,7 +22,7 @@ spec:
           containers:
           - name: restore-check
             image: {{ .Values.image }}
-            imagePullPolicy: Always
+            imagePullPolicy: {{ .Values.imagePullPolicy }}
             command:
             - /bin/bash
             - -c
