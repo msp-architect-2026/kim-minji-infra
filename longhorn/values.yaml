@@ -28,3 +28,26 @@ longhorn:
       requests:
         cpu: 50m
         memory: 192Mi
+
+  # 볼륨 백업 대상(외부 S3 호환). 확정 전에는 비워 둔다 → 스냅샷만 동작 (RUNBOOK C16, 5.3)
+  defaultBackupStore:
+    backupTarget: ~                       # 예: s3://BUCKET@us-east-1/longhorn
+    backupTargetCredentialSecret: longhorn-backup-s3
+
+# 백업 대상 접속 정보 SealedSecret (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_ENDPOINTS)
+# 값이 비어 있으면 만들지 않는다 (Longhorn 자체는 백업 대상 없이도 동작)
+backupS3:
+  secretName: longhorn-backup-s3
+  sealedSecret:
+    encryptedData: {}
+
+# 정기 스냅샷·백업 (groups: default → 따로 지정하지 않은 모든 볼륨)
+recurringJobs:
+  snapshot:
+    cron: "0 1 * * *"
+    retain: 3
+  backup:
+    # defaultBackupStore.backupTarget을 채운 뒤 true로 바꾼다
+    enabled: false
+    cron: "30 1 * * *"
+    retain: 7

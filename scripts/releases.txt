@@ -11,3 +11,4 @@ monitoring      monitoring      monitoring
 loki            loki            monitoring
 ingress         ingress         application
 network-policy  network-policy  default
+backup          backup          storage

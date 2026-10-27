@@ -52,6 +52,10 @@ spec:
                 - chart: loki
                   namespace: monitoring
                   serverSideApply: "false"
+                # 항목 4: 개별 Application(backup/argocd-application.yaml)에서 Helm 차트로 전환
+                - chart: backup
+                  namespace: storage
+                  serverSideApply: "false"
   template:
     metadata:
       name: '{{ .chart }}'

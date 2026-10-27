@@ -1,0 +1,64 @@
+# MySQL 전체 덤프(gzip) → 클러스터 내 MinIO(wafer-backup/mysql/) + 외부 S3({prefix}/mysql/), 보존 기간 지난 덤프 삭제
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: mysql-backup
+  namespace: {{ .Release.Namespace }}
+spec:
+  schedule: {{ .Values.schedule.mysql | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      # 계정 오류 등은 재시도해도 같으므로 빨리 실패로 드러나게 한다
+      backoffLimit: 2
+      template:
+        metadata:
+          labels:
+            {{- include "backup.podLabels" "mysql" | nindent 12 }}
+        spec:
+          containers:
+          - name: mysql-backup
+            image: {{ .Values.image }}
+            imagePullPolicy: Always
+            command:
+            - /bin/bash
+            - -c
+            - |
+              # 덤프·업로드가 실패하면 Job도 실패로 끝나게 한다 (빈 덤프 업로드 방지, 실패 알림 대상)
+              set -euo pipefail
+              {{- include "backup.mcSetup" . | nindent 14 }}
+              FILENAME=backup_$(date +%Y%m%d_%H%M%S).sql.gz
+              echo "백업 시작: ${FILENAME}"
+              # 비밀번호는 명령행 대신 MYSQL_PWD 환경변수로 전달 (ps에 노출 방지)
+              MYSQL_PWD="$MYSQL_PASSWORD" mysqldump -h {{ .Values.mysql.host }} -u "$MYSQL_USER" \
+                --single-transaction --no-tablespaces "$MYSQL_DATABASE" | gzip > /tmp/${FILENAME}
+              mc cp /tmp/${FILENAME} local/${BACKUP_BUCKET}/mysql/${FILENAME}
+              mc rm --recursive --force --older-than {{ .Values.minio.localRetentionDays }}d local/${BACKUP_BUCKET}/mysql/
+              if [ -n "${EXT_ENDPOINT:-}" ]; then
+                mc cp /tmp/${FILENAME} ext/${EXT_BUCKET}/${EXT_PREFIX}/mysql/${FILENAME}
+                mc rm --recursive --force --older-than ${EXT_RETENTION_DAYS}d ext/${EXT_BUCKET}/${EXT_PREFIX}/mysql/
+              fi
+              echo "백업 완료: ${FILENAME}"
+            env:
+            # 계정 정보는 같은 storage 네임스페이스의 Secret(SealedSecret으로 관리)에서 읽는다
+            - name: MYSQL_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.mysql.secretName }}
+                  key: MYSQL_USER
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.mysql.secretName }}
+                  key: MYSQL_PASSWORD
+            - name: MYSQL_DATABASE
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.mysql.secretName }}
+                  key: MYSQL_DATABASE
+            {{- include "backup.minioEnv" . | nindent 12 }}
+          imagePullSecrets:
+          - name: gitlab-registry-secret
+          restartPolicy: OnFailure

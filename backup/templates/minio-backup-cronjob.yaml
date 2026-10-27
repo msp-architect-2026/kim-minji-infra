@@ -1,0 +1,42 @@
+# MinIO 버킷 미러링 → 클러스터 내 wafer-backup/{bucket} + 외부 S3({prefix}/minio/{bucket})
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: minio-backup
+  namespace: {{ .Release.Namespace }}
+spec:
+  schedule: {{ .Values.schedule.minio | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        metadata:
+          labels:
+            {{- include "backup.podLabels" "minio" | nindent 12 }}
+        spec:
+          containers:
+          - name: minio-backup
+            image: {{ .Values.image }}
+            imagePullPolicy: Always
+            command:
+            - /bin/bash
+            - -c
+            - |
+              set -euo pipefail
+              {{- include "backup.mcSetup" . | nindent 14 }}
+              echo "MinIO 백업 시작"
+              for b in {{ join " " .Values.minio.buckets }}; do
+                mc mirror --overwrite local/${b} local/${BACKUP_BUCKET}/${b}
+                if [ -n "${EXT_ENDPOINT:-}" ]; then
+                  mc mirror --overwrite local/${b} ext/${EXT_BUCKET}/${EXT_PREFIX}/minio/${b}
+                fi
+              done
+              echo "MinIO 백업 완료"
+            env:
+            {{- include "backup.minioEnv" . | nindent 12 }}
+          imagePullSecrets:
+          - name: gitlab-registry-secret
+          restartPolicy: OnFailure

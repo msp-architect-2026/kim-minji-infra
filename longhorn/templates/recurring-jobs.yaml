@@ -1,0 +1,34 @@
+# Longhorn 정기 작업. CRD가 먼저 설치된 뒤 적용되도록 sync-wave를 뒤로 둔다
+apiVersion: longhorn.io/v1beta2
+kind: RecurringJob
+metadata:
+  name: daily-snapshot
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  task: snapshot
+  cron: {{ .Values.recurringJobs.snapshot.cron | quote }}
+  retain: {{ .Values.recurringJobs.snapshot.retain }}
+  concurrency: 1
+  groups:
+    - default
+{{- if .Values.recurringJobs.backup.enabled }}
+---
+apiVersion: longhorn.io/v1beta2
+kind: RecurringJob
+metadata:
+  name: daily-backup
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  task: backup
+  cron: {{ .Values.recurringJobs.backup.cron | quote }}
+  retain: {{ .Values.recurringJobs.backup.retain }}
+  concurrency: 1
+  groups:
+    - default
+{{- end }}

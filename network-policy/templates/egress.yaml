@@ -1,7 +1,7 @@
 # egress 허용 규칙은 해당 네임스페이스가 defaultDenyNamespaces에 있을 때만 만든다.
 # (기본 차단을 끈 네임스페이스에 egress 정책만 남으면 DNS까지 막히기 때문)
 {{- if has "application" .Values.defaultDenyNamespaces }}
-# backend → mysql(3306), minio(9000), ai-serving(8000)
+# backend → mysql(3306, failover 시 mysql-replica 포함), minio(9000), ai-serving(8000)
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -21,6 +21,12 @@ spec:
       podSelector:
         matchLabels:
           app.kubernetes.io/name: mysql
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: storage
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: mysql-replica
     ports:
     - protocol: TCP
       port: 3306
@@ -91,4 +97,30 @@ spec:
       port: 3306
     - protocol: TCP
       port: 9000
+{{- if .Values.backupExternalEgress.enabled }}
+---
+# 백업 Job → 클러스터 밖 S3 호환 저장소 (클러스터 내부 대역은 제외)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: backup-external-egress
+  namespace: storage
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: backup
+  policyTypes:
+  - Egress
+  egress:
+  - to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+        except:
+          {{- toYaml .Values.backupExternalEgress.exceptCIDRs | nindent 10 }}
+    ports:
+    {{- range .Values.backupExternalEgress.ports }}
+    - protocol: TCP
+      port: {{ . }}
+    {{- end }}
+{{- end }}
 {{- end }}
