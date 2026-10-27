@@ -42,7 +42,7 @@
 | C19 | 백업 이미지 태그 | `mysql-backup:latest` + `imagePullPolicy: Always` (infra CI는 이제 커밋 SHA 태그로만 빌드) | `backup/values.yaml` `image`, `imagePullPolicy` | `backup/Dockerfile`을 바꿔 infra 파이프라인이 `mysql-backup:<sha>`를 push하면 그 SHA로 바꾸고 `IfNotPresent`로 커밋. 그전까지는 기존 `latest` 이미지를 쓴다 |
 | C20 | GitLab `HELM_REPO_TOKEN` 권한 | ai·backend·frontend CI 변수 | 각 레포 `update-helm.sh` | kim-minji-helm에 push + MR 생성이 가능해야 한다: Personal/Project Access Token 범위 `api`, `write_repository` (기존 토큰이 `write_repository`만이면 MR 생성 단계에서 401/403) |
 | C21 | ai-serving Pod당 처리량 | KEDA 기준 Pod당 `/predict` 2 rps | `kim-minji-helm/ai-serving/values.yaml` `keda.requestsPerSecondPerPod` | 부하 테스트(예: `hey -z 2m -c 4 -m POST -T application/json -d '{"bucket_name":"wafer-images","object_key":"<키>"}' https://ai.wafer.local/predict`)로 p95가 1초를 넘기 시작하는 rps를 찾고 그 70~80%로 정한다 |
-| C12 | VM vCPU 수 | dev는 cp1 1대에 CPU requests ~2.0~2.3 core + instance-manager 예약(5%)이 몰린다 → **cp1 3 vCPU 이상** 권장. full instance-manager는 노드마다 8% | UTM 설정 | `kubectl describe node` Capacity·Allocated resources |
+| C12 | VM vCPU 수 | dev는 cp1 1대에 CPU requests ~2.1~2.4 core + instance-manager 예약(5%)이 몰린다 → **cp1 3 vCPU 이상** 권장. full instance-manager는 노드마다 8% | UTM 설정 | `kubectl describe node` Capacity·Allocated resources |
 
 ## 2. 사전 백업
 
@@ -345,7 +345,9 @@ done
 
 ### 4.13 ai-serving 카나리 배포 운영 (항목 8)
 
-ai-serving은 Argo Rollouts `Rollout`이다. 새 이미지 태그 MR이 머지되면 카나리 Pod 1개를 더 띄워(50%) Prometheus 분석(1분 간격 3회: `/predict` 5xx 비율 < 5%, 수집 대상 ≥ 1)을 하고, 통과하면 전체를 바꾼다. 실패하면 자동으로 이전 버전으로 돌아간다.
+ai-serving은 Argo Rollouts `Rollout`이다. 새 이미지 태그 MR이 머지되면 카나리 Pod를 더 띄워(50%) **카나리 Pod만** Prometheus로 분석하고(1분 뒤부터 1분 간격 3회: `/predict` 5xx 비율 < 5%, 카나리 Pod 수집 중), 통과하면 전체를 바꾼다. 실패하거나 카나리 Pod가 10분 안에 Ready가 안 되면(예: OOMKilled) 자동으로 이전 버전으로 돌아간다.
+
+**적용 순서 (항목 8, 1회)**: infra(keda, argo-rollouts 차트)를 먼저 머지·sync하고 `kubectl get crd rollouts.argoproj.io scaledobjects.keda.sh`와 두 Application Healthy를 확인한 **다음** helm(ai-serving) 변경을 머지한다. CRD가 없을 때 helm이 먼저 sync되면 retry(약 5분)가 끝난 뒤 수동 sync가 필요하다.
 
 ```bash
 # 맥에 플러그인 설치
@@ -359,9 +361,12 @@ kubectl argo rollouts retry rollout ai-serving-ai-serving -n ai-serving
 ```
 
 - 분석 기간 동안 트래픽이 없으면 에러 비율을 0으로 보아 통과한다. 의미 있는 판정을 하려면 배포 중 실제 요청이 들어와야 한다
-- 카나리 동안 Pod가 1개 더 뜬다(`maxSurge: 1`). full에서는 최대 4개 × 1.5Gi가 ai2에 잠시 몰릴 수 있다
+- 카나리 동안 Pod가 1개 더 뜬다(`maxSurge: 1`). full에서는 최대 4개 × 1.5Gi가 ai2에 잠시 몰릴 수 있다 (8장 합계에는 surge Pod 미포함: dev +250m·512Mi, full +500m·1Gi)
+- **full 첫 적용 전 C2 확인**: 첫 Rollout 생성은 카나리 없이 바로 100%라, limit 1.5Gi에서 모델이 OOM이면 정상 Pod가 남지 않는다
 - **전환 시 1회**: 기존 `Deployment`·`HorizontalPodAutoscaler`가 prune되고 `Rollout`·KEDA `ScaledObject`가 새로 생긴다. 새 Pod가 모델을 불러오는 동안(1~2분) ai-serving이 응답하지 않는다. 트래픽이 적은 시간에 머지한다
-- 실패한 카나리가 자동 롤백되면 ArgoCD는 Git(새 태그)과 달라 Degraded로 보인다 → 원인 수정 후 새 태그 MR, 또는 이전 태그로 되돌리는 MR
+- 카나리가 자동 중단되면 Rollout spec은 Git과 같아 ArgoCD는 **Synced / Degraded**로 남는다 (자동으로 다시 시도하지 않음) → 원인 수정 후 새 태그 MR, 같은 태그로 다시 시도하려면 `kubectl argo rollouts retry rollout ...`, 되돌리려면 이전 태그 MR
+- Prometheus 장애 시 KEDA의 요청 수 트리거가 오류가 되어 CPU 기준 확장만 되고 축소는 멈춘다 (Prometheus 복구 후 정상화)
+- 분석은 카나리 Pod 메트릭(`rollouts_pod_template_hash`)을 쓴다. 트래픽이 아주 적으면 5xx 한 건으로도 5%를 넘을 수 있다
 
 ## 5. 채워야 할 시크릿
 
@@ -569,7 +574,7 @@ scripts/resource-summary.py --nodes 3 /tmp/r-infra/full /tmp/r-helm/full
 | **VM 3대에 쓸 수 있는 양** | **~22GB** |
 | 제안 배분 | cp1 8GB / w1 7GB / ai2 7GB |
 
-- dev: 모든 Pod가 cp1에 몰린다. 메모리 ~6.5Gi(HPA 최대) < cp1 8GB → 여유 ~1.5GB. 남은 항목(9: 관측성)은 dev에서 Tempo/OTel을 끄므로 크게 늘지 않는다. **CPU requests ~2.3 core → cp1은 3 vCPU 이상 필요 (C12)**, 2 vCPU면 메모리가 남아도 CPU 부족으로 Pending. 이후 항목(Alertmanager 등)이 더해지면 cp1을 9GB로 늘리고 ai2를 6GB로 줄이는 안을 검토한다.
+- dev: 모든 Pod가 cp1에 몰린다. 메모리 ~6.5Gi(HPA 최대) < cp1 8GB → 여유 ~1.5GB. 남은 항목(9: 관측성)은 dev에서 Tempo/OTel을 끄므로 크게 늘지 않는다. **CPU requests ~2.4 core(HPA 최대) → cp1은 3 vCPU 이상 필요 (C12)**, 2 vCPU면 메모리가 남아도 CPU 부족으로 Pending. 이후 항목(Alertmanager 등)이 더해지면 cp1을 9GB로 늘리고 ai2를 6GB로 줄이는 안을 검토한다.
 - full: 합계 ~11.0Gi(HPA 최소) / ~13.0Gi(최대) < 22GB. (항목 4: MySQL replica, 항목 6: Alertmanager, 항목 8: KEDA·Argo Rollouts 추가, ai-serving 최대 4 → 3)
 - 백업·복원 검증·복제 설정 Job은 실행될 때만 잠깐 뜨므로 합계에 넣지 않았다 (백업 이미지 기준 수십~수백 MiB).
 - full ai-serving (항목 8에서 조정): ai2에 최대 3개 × requests 1Gi / limits 1.5Gi = limits 4.5Gi (카나리 중 +1개면 6Gi) < ai2 7GB.
