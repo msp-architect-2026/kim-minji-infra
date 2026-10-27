@@ -1,0 +1,13 @@
+{{- if .Values.pdb.enabled }}
+# full 프로파일: drain·노드 장애 때 CoreDNS가 최소 1개는 남게 한다 (k3s CoreDNS Pod 라벨 k8s-app=kube-dns)
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: coredns
+  namespace: kube-system
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      k8s-app: kube-dns
+{{- end }}
