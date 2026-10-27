@@ -756,8 +756,76 @@ kube-prometheus-stack:
         cpu: 100m
         memory: 96Mi
 
-  alertmanager:
+  # k3s는 controller-manager·scheduler·etcd·kube-proxy 메트릭을 기본으로 노출하지 않아
+  # 수집 대상과 관련 규칙이 항상 Down 알림을 낸다 → 끈다
+  kubeControllerManager:
     enabled: false
+  kubeScheduler:
+    enabled: false
+  kubeEtcd:
+    enabled: false
+  kubeProxy:
+    enabled: false
+
+  alertmanager:
+    enabled: true
+    alertmanagerSpec:
+      # Slack Incoming Webhook URL (SealedSecret alertmanager-slack) → /etc/alertmanager/secrets/alertmanager-slack/
+      secrets:
+        - alertmanager-slack
+      retention: 120h
+      resources:
+        requests:
+          cpu: 25m
+          memory: 64Mi
+        limits:
+          cpu: 200m
+          memory: 128Mi
+    config:
+      global:
+        resolve_timeout: 5m
+      route:
+        receiver: slack
+        group_by: [alertname, namespace]
+        group_wait: 30s
+        group_interval: 5m
+        repeat_interval: 4h
+        routes:
+          # 파이프라인 동작 확인용 상시 알림은 보내지 않는다
+          - receiver: "null"
+            matchers:
+              - alertname =~ "Watchdog|InfoInhibitor"
+          # 백업 Job 실패는 BackupJobFailed(CronJob 기준, 성공 시 해소)로 알린다. 기본 KubeJobFailed는 실패 Job이 남는 한 계속 울린다
+          - receiver: "null"
+            matchers:
+              - alertname = "KubeJobFailed"
+              - namespace = "storage"
+      inhibit_rules:
+        # critical이 울리면 같은 대상의 warning은 묶어서 숨긴다
+        - source_matchers: [severity = "critical"]
+          target_matchers: [severity = "warning"]
+          equal: [alertname, namespace]
+        - source_matchers: [alertname = "InfoInhibitor"]
+          target_matchers: [severity = "info"]
+          equal: [namespace]
+      receivers:
+        - name: "null"
+        - name: slack
+          slack_configs:
+            - api_url_file: /etc/alertmanager/secrets/alertmanager-slack/webhook-url
+              send_resolved: true
+              title: '[{{ .Status | toUpper }}{{ if eq .Status "firing" }}:{{ .Alerts.Firing | len }}{{ end }}] {{ .CommonLabels.alertname }}'
+              text: |-
+                {{ range .Alerts }}*{{ .Labels.severity }}* {{ .Labels.namespace }} {{ .Annotations.summary }}
+                {{ .Annotations.description }}
+                {{ end }}
+
+# Slack Incoming Webhook URL SealedSecret (Alertmanager). 값이 비어 있으면 렌더링 실패 (RUNBOOK 5.4)
+alertmanagerSlack:
+  secretName: alertmanager-slack
+  sealedSecret:
+    encryptedData: {}
+      # webhook-url: AgB...
 
 # Grafana admin 계정 SealedSecret. kubeseal로 암호화한 값 (README/RUNBOOK 참고)
 grafanaAdmin:
@@ -766,3 +834,12 @@ grafanaAdmin:
     encryptedData: {}
       # admin-user: AgB...
       # admin-password: AgB...
+
+# 서비스 알림 규칙 (templates/wafer-rules.yaml). job 라벨은 ServiceMonitor 대상 Service 이름
+alertRules:
+  backendJob: backend-backend
+  aiJob: ai-serving-ai-serving
+  errorRatio: 0.05
+  backendLatencySeconds: 1
+  aiSlowRatio: 0.1
+  backupMaxAgeHours: 26

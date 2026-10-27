@@ -8,7 +8,7 @@
 계산 규칙:
   - Deployment/StatefulSet: replicas × 컨테이너 requests 합 (HPA가 있으면 minReplicas, 최대치는 별도 열)
   - DaemonSet: --nodes(켜져 있는 노드 수) × 컨테이너 requests 합
-  - Prometheus(CR): spec.replicas(기본 1) × spec.resources.requests
+  - Prometheus·Alertmanager(CR): spec.replicas(기본 1) × spec.resources.requests
   - requests가 없는 컨테이너는 0으로 세고 "미설정"으로 표시한다
 필요: PyYAML (pip install pyyaml)
 """
@@ -89,7 +89,7 @@ def main():
                 h = hpa.get((kind, meta["name"]))
                 if h:
                     n, n_max = h.get("minReplicas", 1), h["maxReplicas"]
-        elif kind == "Prometheus":
+        elif kind in ("Prometheus", "Alertmanager"):
             cpu, mem, unset = requests_of([{"resources": spec.get("resources")}])
             n = n_max = spec.get("replicas", 1)
         else:
