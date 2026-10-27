@@ -1,0 +1,12 @@
+# Grafana SLO 대시보드. kube-prometheus-stack의 Grafana sidecar가 grafana_dashboard=1 라벨 ConfigMap을 불러온다.
+# JSON은 Helm 템플릿으로 해석하지 않도록 dashboards/ 파일을 그대로 넣는다
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: wafer-slo-dashboard
+  namespace: {{ .Release.Namespace }}
+  labels:
+    grafana_dashboard: "1"
+data:
+  wafer-slo.json: |-
+{{ .Files.Get "dashboards/slo.json" | indent 4 }}

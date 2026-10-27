@@ -1,0 +1,9 @@
+apiVersion: v2
+name: tempo
+version: 1.0.0
+dependencies:
+  - name: tempo
+    version: "1.24.4"
+    repository: https://grafana.github.io/helm-charts
+    # full 프로파일에서만 설치한다 (dev는 렌더링 결과가 비어 Application이 아무것도 만들지 않는다)
+    condition: tempo.enabled

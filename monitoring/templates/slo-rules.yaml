@@ -1,0 +1,59 @@
+# SLO: 가용성·지연 목표에 대한 오류 예산 소진 속도(burn rate) 알림 (Google SRE 다중 창 방식).
+#  - 빠른 소진: 1시간·5분 창 모두 예산의 14.4배 속도 → critical (이대로면 약 2일에 30일 예산 소진)
+#  - 느린 소진: 6시간·30분 창 모두 6배 → warning (약 5일에 소진)
+# SLI 정의는 values의 slo.slis (bad = 나쁜 이벤트, total = 전체 이벤트, {{`{{window}}`}} 자리에 창이 들어간다)
+{{- $windows := list "5m" "30m" "1h" "6h" "1d" }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: slo-rules
+  namespace: {{ .Release.Namespace }}
+  labels:
+    release: {{ .Release.Name }}
+spec:
+  groups:
+    - name: slo.recording
+      rules:
+        {{- range $sli := .Values.slo.slis }}
+        {{- range $w := $windows }}
+        - record: slo:sli_error:ratio_rate{{ $w }}
+          expr: |
+            ({{ $sli.bad | replace "WINDOW" $w }})
+              / ({{ $sli.total | replace "WINDOW" $w }})
+          labels:
+            slo: {{ $sli.name }}
+            service: {{ $sli.service }}
+            namespace: {{ $sli.namespace }}
+        {{- end }}
+        {{- end }}
+    - name: slo.alerts
+      rules:
+        {{- range $sli := .Values.slo.slis }}
+        {{- $budget := subf 1.0 $sli.objective }}
+        - alert: SLOErrorBudgetBurnFast
+          expr: |
+            slo:sli_error:ratio_rate1h{slo="{{ $sli.name }}"} > (14.4 * {{ $budget }})
+              and slo:sli_error:ratio_rate5m{slo="{{ $sli.name }}"} > (14.4 * {{ $budget }})
+          for: 2m
+          labels:
+            severity: critical
+            slo: {{ $sli.name }}
+            service: {{ $sli.service }}
+            namespace: {{ $sli.namespace }}
+          annotations:
+            summary: "{{ $sli.description }} SLO 오류 예산 빠르게 소진 중 (1시간 창)"
+            description: "1시간 오류율 {{`{{ $value | humanizePercentage }}`}} (목표 {{ mulf $sli.objective 100 }}%, 허용 {{ mulf $budget 100 }}%의 14.4배 초과)"
+        - alert: SLOErrorBudgetBurnSlow
+          expr: |
+            slo:sli_error:ratio_rate6h{slo="{{ $sli.name }}"} > (6 * {{ $budget }})
+              and slo:sli_error:ratio_rate30m{slo="{{ $sli.name }}"} > (6 * {{ $budget }})
+          for: 15m
+          labels:
+            severity: warning
+            slo: {{ $sli.name }}
+            service: {{ $sli.service }}
+            namespace: {{ $sli.namespace }}
+          annotations:
+            summary: "{{ $sli.description }} SLO 오류 예산 소진 중 (6시간 창)"
+            description: "6시간 오류율 {{`{{ $value | humanizePercentage }}`}} (목표 {{ mulf $sli.objective 100 }}%)"
+        {{- end }}

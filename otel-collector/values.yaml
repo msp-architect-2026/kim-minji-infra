@@ -1,0 +1,51 @@
+# OpenTelemetry Collector: 앱·Traefik의 OTLP trace를 받아 Tempo로 보낸다
+# 서비스 주소: otel-collector.monitoring.svc:4317(gRPC) / :4318(HTTP)
+opentelemetry-collector:
+  enabled: false
+  fullnameOverride: otel-collector
+  mode: deployment
+  replicaCount: 1
+  image:
+    repository: otel/opentelemetry-collector-k8s
+  resources:
+    requests:
+      cpu: 25m
+      memory: 96Mi
+    limits:
+      cpu: 300m
+      memory: 256Mi
+  ports:
+    jaeger-compact:
+      enabled: false
+    jaeger-thrift:
+      enabled: false
+    jaeger-grpc:
+      enabled: false
+    zipkin:
+      enabled: false
+  config:
+    receivers:
+      jaeger: null
+      zipkin: null
+      prometheus: null
+    exporters:
+      debug: null
+      otlp_grpc/tempo:
+        endpoint: tempo.monitoring.svc:4317
+        tls:
+          insecure: true
+    processors:
+      # 프로브·메트릭 수집 요청 span은 버린다 (backend /actuator/*, ai-serving /health·/metrics)
+      filter/noise:
+        error_mode: ignore
+        traces:
+          span:
+            - 'IsMatch(attributes["url.path"], "^/(actuator|health$|metrics$)")'
+    service:
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, filter/noise, batch]
+          exporters: [otlp_grpc/tempo]
+        metrics: null
+        logs: null

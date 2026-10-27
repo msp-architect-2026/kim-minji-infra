@@ -42,6 +42,8 @@
 | C19 | 백업 이미지 태그 | `mysql-backup:latest` + `imagePullPolicy: Always` (infra CI는 이제 커밋 SHA 태그로만 빌드) | `backup/values.yaml` `image`, `imagePullPolicy` | `backup/Dockerfile`을 바꿔 infra 파이프라인이 `mysql-backup:<sha>`를 push하면 그 SHA로 바꾸고 `IfNotPresent`로 커밋. 그전까지는 기존 `latest` 이미지를 쓴다 |
 | C20 | GitLab `HELM_REPO_TOKEN` 권한 | ai·backend·frontend CI 변수 | 각 레포 `update-helm.sh` | kim-minji-helm에 push + MR 생성이 가능해야 한다: Personal/Project Access Token 범위 `api`, `write_repository` (기존 토큰이 `write_repository`만이면 MR 생성 단계에서 401/403) |
 | C21 | ai-serving Pod당 처리량 | KEDA 기준 Pod당 `/predict` 2 rps | `kim-minji-helm/ai-serving/values.yaml` `keda.requestsPerSecondPerPod` | 부하 테스트(예: `hey -z 2m -c 4 -m POST -T application/json -d '{"bucket_name":"wafer-images","object_key":"<키>"}' https://ai.wafer.local/predict`)로 p95가 1초를 넘기 시작하는 rps를 찾고 그 70~80%로 정한다 |
+| C22 | backend 메모리 (full, OTel Java agent 포함) | limits 1Gi, `JAVA_OPTS=-XX:MaxRAMPercentage=75` | `kim-minji-helm/backend/values.yaml` `resources` | agent가 힙 밖 메모리를 50~100Mi 더 쓴다. full 배포 후 OOMKilled·GC 시간 확인, 부족하면 limit 상향 |
+| C23 | cp1·w1 디스크 여유 (Longhorn) | full 복제 2 기준 볼륨 합계 70Gi → 노드당 35Gi + 여유 | Longhorn 노드 디스크 (`/var/lib/longhorn`) | `df -h /var/lib/longhorn`, Longhorn UI의 노드 Schedulable 용량. 부족하면 VM 디스크 확장 또는 PVC 크기(mysql·minio 10Gi) 축소 |
 | C12 | VM vCPU 수 | dev는 cp1 1대에 CPU requests ~2.1~2.4 core + instance-manager 예약(5%)이 몰린다 → **cp1 3 vCPU 이상** 권장. full instance-manager는 노드마다 8% | UTM 설정 | `kubectl describe node` Capacity·Allocated resources |
 
 ## 2. 사전 백업
@@ -368,6 +370,20 @@ kubectl argo rollouts retry rollout ai-serving-ai-serving -n ai-serving
 - Prometheus 장애 시 KEDA의 요청 수 트리거가 오류가 되어 CPU 기준 확장만 되고 축소는 멈춘다 (Prometheus 복구 후 정상화)
 - 분석은 카나리 Pod 메트릭(`rollouts_pod_template_hash`)을 쓴다. 트래픽이 아주 적으면 5xx 한 건으로도 5%를 넘을 수 있다
 
+### 4.14 트레이싱·SLO (항목 9)
+
+**트레이싱 (full만)**: Traefik → backend(OTel Java agent) → ai-serving(opentelemetry-instrument) 순서로 trace가 이어지고, OTel Collector(`otel-collector.monitoring:4317/4318`)를 거쳐 Tempo(48시간, Longhorn 5Gi)에 저장된다. dev에서는 tempo·otel-collector Application이 비어 있고(Healthy), 앱 계측도 꺼진다(`OTEL_SDK_DISABLED`, agent 미주입).
+
+- Grafana → Explore → Tempo → Search에서 `service.name=traefik` 등으로 trace 조회. 한 trace에 traefik·backend·ai-serving span이 같이 있어야 한다
+- Grafana → Explore → Loki에서 backend 로그의 `[trace_id=...]`를 누르면 Tempo trace로 이동한다 (ai-serving은 `print()` 로그라 trace_id가 없다). 반대로 Tempo span에서 "Logs for this span"을 누르면 같은 서비스(`app` 라벨)의 해당 trace_id 로그를 찾는다
+- 프로브·메트릭 수집 요청 span은 Collector에서 버린다 (`filter/noise`)
+- trace가 안 보이면: Collector 로그(`kubectl -n monitoring logs deploy/otel-collector`), 앱 → monitoring 4317/4318 NetworkPolicy, backend Pod의 `JAVA_TOOL_OPTIONS`·initContainer 완료 여부
+
+**SLO**: 가용성 99.5%, backend p95 < 1초, AI(/predict) p95 < 3초. `slo-rules`가 창별(5m~1d) 오류율을 기록하고, 오류 예산 소진 속도로 알린다 (Fast: 1시간·5분 창 14.4배 → critical, Slow: 6시간·30분 창 6배 → warning). 기존 단순 비율·지연 알림(BackendHighErrorRate 등)은 이 알림으로 대체했다. Grafana 대시보드 **Wafer SLO**.
+
+- 목표 기간은 30일이지만 Prometheus 보존 기간(dev 2일 / full 7일) 안에서만 달성률이 계산된다
+- backend 지연 SLO는 새 backend 이미지(SLO 히스토그램 버킷 포함)부터, AI 지연 SLO는 새 ai 이미지(버킷 0.1~10초)부터 값이 나온다
+
 ## 5. 채워야 할 시크릿
 
 모든 값은 `kubeseal`로 암호화해 해당 values 파일의 placeholder 자리에 커밋한다. 평문 커밋 금지.
@@ -500,6 +516,9 @@ printf '    slack-webhook-url: %s\n' "$(seal "$URL" gitops argocd-notifications-
 - [ ] (항목 8) 스케일링: C21 부하 테스트 중 Pod가 늘었다가(최대 dev 2 / full 3) 부하가 끝나고 5분 뒤 줄어듦
 - [ ] (항목 8) 카나리: 새 태그 MR 머지 → `kubectl argo rollouts get rollout ...`에서 50% → 분석 Successful → 100%. 일부러 실패시키는 시험: 분석 중 `/predict`에 잘못된 요청을 반복해 5xx를 내면 Aborted·자동 롤백
 - [ ] (항목 8) 지연 히스토그램 버킷: Prometheus에서 `http_request_duration_seconds_bucket{handler="/predict"}`의 `le`에 2, 3, 5, 10이 보임 (ai 이미지가 새 버전일 때)
+- [ ] (항목 9, full) Tempo에서 한 trace에 traefik·backend·ai-serving span, backend Loki 로그 trace_id → Tempo 이동, Tempo span → Logs for this span
+- [ ] (항목 9) Grafana **Wafer SLO** 대시보드에 4개 SLO 달성률·소진 속도·p95가 표시됨, Prometheus Rules에 `slo.recording`·`slo.alerts` 그룹
+- [ ] (항목 9, dev) tempo·otel-collector Application이 비어 있고 Healthy, backend Pod에 otel initContainer 없음
 - [ ] (항목 5) PDB: `kubectl get pdb -A` → frontend·backend(minAvailable 1), ai-serving(maxUnavailable 1), coredns, traefik
 - [ ] (항목 5) frontend·backend·traefik 2개가 cp1·w1에 하나씩, ai2에는 없음: `kubectl -n application get pod -o wide`, `kubectl -n traefik get pod -o wide` (ai2는 nodeAffinity로 제외)
 - [ ] (항목 5) drain 무중단 확인 (위 항목에서 w1에 frontend·backend가 있는 것을 먼저 확인): 맥에서 `while true; do curl -sk -o /dev/null -w '%{http_code}\n' https://app.wafer.local/; sleep 1; done`을 띄운 채 `kubectl drain k3s-w1 --ignore-daemonsets --delete-emptydir-data` → 200이 계속 나오는지, drain이 PDB 때문에 멈추지 않는지 → `kubectl uncordon k3s-w1`
@@ -520,6 +539,8 @@ printf '    slack-webhook-url: %s\n' "$(seal "$URL" gitops argocd-notifications-
 - 스토리지 이전 롤백 (4.8 도중 문제): helm 레포의 `storageClassName`을 `""`로 되돌려 커밋 → 새 Longhorn PVC·StatefulSet 삭제 → sync(local-path로 재생성) → 2장 백업으로 복원. 3단계에서 보존한 옛 PV를 다시 쓰려면 PV의 `claimRef`를 지우고 같은 이름의 PVC가 그 PV를 지정하도록(`volumeName`) 만든다
 - MySQL replica 끄기: `env=dev` (또는 `mysql/values-full.yaml`의 `replication.enabled: false`) → replica StatefulSet은 prune으로 삭제된다 (항목 7 이후). **PVC `data-mysql-mysql-replica-0`은 ArgoCD가 관리하지 않으므로 직접 삭제**한다. PVC를 남겨 두면 binlog 보관 기간(3일)이 지난 뒤 full을 다시 켰을 때 replica가 따라잡지 못해(오류 1236) 설정 Job이 계속 실패한다
 - PDB가 drain을 막을 때(예: 노드 1대만 남은 상태): 해당 Pod가 다른 노드에 Ready로 뜨기를 기다리거나, 급하면 `kubectl delete pdb <이름>` (다음 sync에서 다시 생성된다). full에서 노드를 2대 이상 끌 계획이면 먼저 `env=dev`로 바꾼다(4.3)
+- 트레이싱 끄기: kim-minji-helm `backend`·`ai-serving`의 `values-full.yaml`에서 `tracing.enabled: false`, kim-minji-infra `tempo`·`otel-collector`의 `values-full.yaml`에서 `enabled: false`, Traefik `values-full.yaml`의 `tracing` 블록 제거
+- SLO 알림이 너무 잦으면: `monitoring/values.yaml` `slo.slis[].objective` 조정 (예: 지연 0.95 → 0.9)
 - 카나리 롤백: 진행 중이면 `kubectl argo rollouts abort` (이전 버전 유지). 이미 100%면 이전 태그로 되돌리는 MR. 카나리 자체를 끄려면 `rollout.enabled: false`(Deployment로 돌아가며 전환 시 1회 짧은 중단)
 - 이미지 태그 MR 운영: 같은 차트의 `ci/` MR이 여러 개 열려 있으면 **가장 최신 것만 머지**하고 나머지는 닫는다 (오래된 MR을 나중에 머지하면 이미지가 되돌아간다)
 - 배포 롤백: kim-minji-helm에서 해당 MR을 revert(또는 이전 SHA로 태그를 되돌리는 MR) → 머지 → ArgoCD가 이전 이미지로 롤아웃
@@ -532,7 +553,7 @@ printf '    slack-webhook-url: %s\n' "$(seal "$URL" gitops argocd-notifications-
 - HTTPS 리다이렉트 롤백: `traefik/values.yaml`의 `ports.web.http.redirections` 제거 커밋 (TLS 인증서는 그대로 두어도 무방)
 - k3s 설정 롤백: `/etc/rancher/k3s/config.yaml`의 `disable` 항목 제거 후 `systemctl restart k3s`
 
-작성 예정 (항목 9). 원칙:
+원칙:
 
 - 코드 롤백은 Git revert → ArgoCD sync
 - 프로파일 전환 롤백은 클러스터 Secret의 `env` 라벨을 이전 값으로 되돌린다
@@ -549,16 +570,16 @@ scripts/resource-summary.py --nodes 1 /tmp/r-infra/dev /tmp/r-helm/dev
 scripts/resource-summary.py --nodes 3 /tmp/r-infra/full /tmp/r-helm/full
 ```
 
-### 8.1 요약 (항목 8 기준, 2026-10-27)
+### 8.1 요약 (항목 9 기준 최종, 2026-10-27)
 
 | 구분 | dev (cp1 1대) CPU | dev 메모리 | full (3대) CPU | full 메모리 |
 |---|---|---|---|---|
-| 레포 워크로드 requests | 1745m | 3.53Gi | 3260m | 6.59Gi |
-| 레포 워크로드 (HPA 최대치) | 1995m | 4.03Gi | 4260m | 8.59Gi |
+| 레포 워크로드 requests | 1745m | 3.53Gi | 3335m | 6.94Gi |
+| 레포 워크로드 (HPA 최대치) | 1995m | 4.03Gi | 4335m | 8.94Gi |
 | 레포 밖·동적 생성 구성요소 (추정, C8) | ~0.4 core | ~1.5Gi | ~1.2 core | ~2.2Gi |
 | k3s 프로세스·OS (추정) | — | ~1.0Gi | — | ~2.2Gi (server 1.0 + agent 0.6×2) |
-| **합계 (HPA 최소)** | **~2.1 core** | **~6.0Gi** | **~4.5 core** | **~11.0Gi** |
-| **합계 (HPA 최대)** | **~2.4 core** | **~6.5Gi** | **~5.5 core** | **~13.0Gi** |
+| **합계 (HPA 최소)** | **~2.1 core** | **~6.0Gi** | **~4.5 core** | **~11.3Gi** |
+| **합계 (HPA 최대)** | **~2.4 core** | **~6.5Gi** | **~5.5 core** | **~13.3Gi** |
 
 레포 밖·동적 생성 구성요소 추정(실제 사용량 기준):
 - ArgoCD ~800Mi, k3s 내장 coredns 70Mi(100m)·metrics-server 70Mi(100m)·local-path 20Mi (full은 coredns 2개분)
@@ -574,8 +595,9 @@ scripts/resource-summary.py --nodes 3 /tmp/r-infra/full /tmp/r-helm/full
 | **VM 3대에 쓸 수 있는 양** | **~22GB** |
 | 제안 배분 | cp1 8GB / w1 7GB / ai2 7GB |
 
-- dev: 모든 Pod가 cp1에 몰린다. 메모리 ~6.5Gi(HPA 최대) < cp1 8GB → 여유 ~1.5GB. 남은 항목(9: 관측성)은 dev에서 Tempo/OTel을 끄므로 크게 늘지 않는다. **CPU requests ~2.4 core(HPA 최대) → cp1은 3 vCPU 이상 필요 (C12)**, 2 vCPU면 메모리가 남아도 CPU 부족으로 Pending. 이후 항목(Alertmanager 등)이 더해지면 cp1을 9GB로 늘리고 ai2를 6GB로 줄이는 안을 검토한다.
-- full: 합계 ~11.0Gi(HPA 최소) / ~13.0Gi(최대) < 22GB. (항목 4: MySQL replica, 항목 6: Alertmanager, 항목 8: KEDA·Argo Rollouts 추가, ai-serving 최대 4 → 3)
+- dev: 모든 Pod가 cp1에 몰린다. 메모리 ~6.5Gi(HPA 최대) < cp1 8GB → 여유 ~1.5GB. 항목 9의 Tempo·OTel은 dev에서 꺼져 있다. **CPU requests ~2.4 core(HPA 최대) → cp1은 3 vCPU 이상 필요 (C12)**, 2 vCPU면 메모리가 남아도 CPU 부족으로 Pending. 이후 항목(Alertmanager 등)이 더해지면 cp1을 9GB로 늘리고 ai2를 6GB로 줄이는 안을 검토한다.
+- full: 합계 ~11.3Gi(HPA 최소) / ~13.3Gi(최대) < 22GB. (항목 4: MySQL replica, 항목 6: Alertmanager, 항목 8: KEDA·Argo Rollouts, 항목 9: Tempo 50m·256Mi + OTel Collector 25m·96Mi. backend Java agent의 추가 메모리(C22)와 카나리 surge Pod는 미포함)
+- Longhorn 디스크(full, 복제 2): mysql 10Gi×2, mysql replica 10Gi×2, minio 10Gi×2, Tempo 5Gi×2 = 70Gi → cp1·w1 디스크 각 35Gi 이상 필요
 - 백업·복원 검증·복제 설정 Job은 실행될 때만 잠깐 뜨므로 합계에 넣지 않았다 (백업 이미지 기준 수십~수백 MiB).
 - full ai-serving (항목 8에서 조정): ai2에 최대 3개 × requests 1Gi / limits 1.5Gi = limits 4.5Gi (카나리 중 +1개면 6Gi) < ai2 7GB.
 
@@ -651,9 +673,9 @@ full (`--nodes 3`):
 | mysql | StatefulSet | mysql-mysql | 1 | 200m · 512Mi | 200m | 512Mi |
 | mysql | StatefulSet | mysql-mysql-replica | 1 | 200m · 512Mi | 200m | 512Mi |
 | node-local-dns | DaemonSet | node-local-dns | 3 | 100m · 64Mi | 300m | 192Mi |
+| otel-collector | Deployment | otel-collector | 1 | 25m · 96Mi | 25m | 96Mi |
 | sealed-secrets | Deployment | sealed-secrets-controller | 1 | 25m · 64Mi | 25m | 64Mi |
+| tempo | StatefulSet | tempo | 1 | 50m · 256Mi | 50m | 256Mi |
 | traefik | Deployment | traefik | 2 | 50m · 64Mi | 100m | 128Mi |
-| **합계** | | | | | **3260m** | **6.59Gi** |
-| **HPA 최대치 기준** | | | | | **4260m** | **8.59Gi** |
-
-> 항목 9(Tempo/OTel 등)가 추가되면 이 표를 갱신한다.
+| **합계** | | | | | **3335m** | **6.94Gi** |
+| **HPA 최대치 기준** | | | | | **4335m** | **8.94Gi** |

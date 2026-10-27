@@ -1,4 +1,4 @@
-# 서비스별 알림 규칙. CrashLoop·노드 다운·HPA 최대·PVC 용량·Job 실패는 kube-prometheus-stack 기본 규칙
+# 서비스별 알림 규칙 (에러율·지연은 slo-rules.yaml의 burn rate 알림). CrashLoop·노드 다운·HPA 최대·PVC 용량·Job 실패는 kube-prometheus-stack 기본 규칙
 # (KubePodCrashLooping, KubeNodeNotReady, KubeHpaMaxedOut, KubePersistentVolumeFillingUp, KubeJobFailed)을 쓴다.
 # release 라벨: Prometheus의 ruleSelector가 이 릴리스의 규칙만 읽는다
 apiVersion: monitoring.coreos.com/v1
@@ -21,27 +21,6 @@ spec:
           annotations:
             summary: backend 전체 다운 (모든 Pod 메트릭 수집 불가)
             description: "kubectl -n application get pod -l app.kubernetes.io/name=backend"
-        - alert: BackendHighErrorRate
-          expr: |
-            sum by (namespace) (rate(http_server_requests_seconds_count{job="{{ .Values.alertRules.backendJob }}",uri!~"/actuator.*",status=~"5.."}[5m]))
-              / sum by (namespace) (rate(http_server_requests_seconds_count{job="{{ .Values.alertRules.backendJob }}",uri!~"/actuator.*"}[5m])) > {{ .Values.alertRules.errorRatio }}
-          for: 5m
-          labels:
-            severity: warning
-          annotations:
-            summary: backend 5xx 비율이 {{ mulf .Values.alertRules.errorRatio 100 }}%를 넘음
-            description: "현재 {{`{{ $value | humanizePercentage }}`}}"
-        - alert: BackendHighLatency
-          # 평균 응답시간 (p95는 히스토그램 활성화 후 SLO 항목에서 대체)
-          expr: |
-            sum by (namespace) (rate(http_server_requests_seconds_sum{job="{{ .Values.alertRules.backendJob }}",uri!~"/actuator.*"}[5m]))
-              / sum by (namespace) (rate(http_server_requests_seconds_count{job="{{ .Values.alertRules.backendJob }}",uri!~"/actuator.*"}[5m])) > {{ .Values.alertRules.backendLatencySeconds }}
-          for: 10m
-          labels:
-            severity: warning
-          annotations:
-            summary: backend 평균 응답시간이 {{ .Values.alertRules.backendLatencySeconds }}초를 넘음
-            description: "현재 {{`{{ $value | humanizeDuration }}`}}"
         - alert: BackendCircuitBreakerOpen
           expr: max by (namespace, name) (resilience4j_circuitbreaker_state{job="{{ .Values.alertRules.backendJob }}",state="open"}) == 1
           for: 1m
@@ -60,29 +39,6 @@ spec:
           annotations:
             summary: ai-serving 전체 다운 (모든 Pod 메트릭 수집 불가)
             description: "kubectl -n ai-serving get pod (모델 로딩 실패·OOMKilled 확인)"
-        - alert: AIInferenceErrors
-          expr: |
-            sum by (namespace) (rate(http_requests_total{job="{{ .Values.alertRules.aiJob }}",handler="/predict",status="5xx"}[5m]))
-              / sum by (namespace) (rate(http_requests_total{job="{{ .Values.alertRules.aiJob }}",handler="/predict"}[5m])) > {{ .Values.alertRules.errorRatio }}
-          for: 5m
-          labels:
-            severity: warning
-          annotations:
-            summary: AI 추론(/predict) 에러 비율이 {{ mulf .Values.alertRules.errorRatio 100 }}%를 넘음
-            description: "현재 {{`{{ $value | humanizePercentage }}`}}"
-        - alert: AIInferenceSlow
-          # 1초 넘는 요청 비율로 판단 (ai 앱 버킷 확장 전 이미지에서도 동작하도록 le="1.0" 기준 유지)
-          expr: |
-            1 - (
-              sum by (namespace) (rate(http_request_duration_seconds_bucket{job="{{ .Values.alertRules.aiJob }}",handler="/predict",le="1.0"}[5m]))
-                / sum by (namespace) (rate(http_request_duration_seconds_count{job="{{ .Values.alertRules.aiJob }}",handler="/predict"}[5m]))
-            ) > {{ .Values.alertRules.aiSlowRatio }}
-          for: 10m
-          labels:
-            severity: warning
-          annotations:
-            summary: AI 추론(/predict) 요청의 {{ mulf .Values.alertRules.aiSlowRatio 100 }}% 넘게 1초 초과
-            description: "1초 초과 비율 {{`{{ $value | humanizePercentage }}`}}"
     - name: wafer.backup
       rules:
         - alert: BackupJobFailed

@@ -11,6 +11,8 @@ coredns         coredns         kube-system  skip-schema
 node-local-dns  node-local-dns  kube-system
 monitoring      monitoring      monitoring
 loki            loki            monitoring
+tempo           tempo           monitoring
+otel-collector  otel-collector  monitoring
 ingress         ingress         application
 network-policy  network-policy  default
 backup          backup          storage

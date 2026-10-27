@@ -50,6 +50,16 @@ spec:
     ports:
     - protocol: TCP
       port: 8000
+  # OTel Collector (full 트레이싱)
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: monitoring
+    ports:
+    - protocol: TCP
+      port: 4317
+    - protocol: TCP
+      port: 4318
 {{- end }}
 ---
 {{- if has "ai-serving" .Values.defaultDenyNamespaces }}
@@ -76,6 +86,16 @@ spec:
     ports:
     - protocol: TCP
       port: 9000
+  # OTel Collector (full 트레이싱)
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: monitoring
+    ports:
+    - protocol: TCP
+      port: 4317
+    - protocol: TCP
+      port: 4318
 {{- end }}
 ---
 {{- if has "storage" .Values.defaultDenyNamespaces }}
