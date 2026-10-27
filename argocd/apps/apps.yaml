@@ -10,6 +10,10 @@ spec:
   goTemplate: true
   syncPolicy:
     preserveResourcesOnDeletion: true
+  # 유지보수(RUNBOOK 4.12) 때 Application의 자동 sync를 kubectl로 잠시 끌 수 있게, 이 필드만은 ApplicationSet이 되돌리지 않는다
+  ignoreApplicationDifferences:
+    - jsonPointers:
+        - /spec/syncPolicy/automated
   generators:
     # 주의: clusters 생성기도 .name(클러스터 이름)을 내보내고 matrix에서 우선한다. 차트 이름은 .chart로 쓴다.
     - matrix:
@@ -48,9 +52,11 @@ spec:
       destination:
         server: '{{ .server }}'
         namespace: '{{ .namespace }}'
-      # 앱은 auto-sync만 (prune/selfHeal 정책은 GitOps 항목에서 재검토)
+      # Git이 유일한 기준: 지운 리소스는 삭제(prune), 수동 변경은 되돌림(selfHeal)
       syncPolicy:
-        automated: {}
+        automated:
+          prune: true
+          selfHeal: true
         syncOptions:
           - CreateNamespace=true
         retry:
