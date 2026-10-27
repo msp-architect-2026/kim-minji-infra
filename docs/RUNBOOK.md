@@ -3,7 +3,8 @@
 코드(kim-minji-helm, kim-minji-infra)가 모두 머지된 뒤 클러스터에서 직접 수행할 작업을 순서대로 정리한다.
 레포의 코드는 클러스터에 접속하지 않고 작성·검증했다(`scripts/validate.sh`: helm lint / helm template / kubeconform / yamllint, dev·full).
 
-> 이 문서는 항목별 PR이 머지될 때마다 갱신한다. `작성 예정 (항목 N)`은 해당 항목 PR에서 채운다.
+> 기준: 항목 0~9 코드가 GitHub `develop`에 머지된 상태 (2026-10-27). 본문의 "항목 N"은 plan.md의 작업 항목 번호다.
+> **처음 읽는다면 0.5장(전체 실행 순서)부터** 따라가고, 각 단계에서 가리키는 장을 펼쳐 본다.
 
 ## 0. 전제
 
@@ -16,35 +17,77 @@
 | 프로파일 | `dev`(기본) / `full`. ArgoCD ApplicationSet이 in-cluster 클러스터 Secret의 `env` 라벨로 values 파일을 고른다 |
 | 컨트롤 플레인 HA | 범위 밖 (server 1대). cp1이 꺼지면 API·스케줄링이 멈춘다 |
 
+## 0.5 전체 실행 순서 (A안: 기존 클러스터 유지)
+
+이 순서대로 진행한다. B안(새로 설치)은 3장. 각 단계의 세부는 괄호 안의 장을 본다.
+
+**핵심 주의**: 지금 클러스터의 기존 Application(coredns, loki, monitoring, node-local-dns, backup, 그리고 클러스터에만 있는 앱 Application)은 GitLab `main`을 자동 sync한다. 새 코드를 GitLab `main`에 올리는 순간 그 앱들이 새 차트로 바뀌기 시작한다 (예: monitoring은 Slack·Grafana 시크릿 필요, ingress 규칙은 Traefik으로). 그래서 **GitLab에 올리기 전에 기존 Application을 리소스는 남긴 채 지운다**(3단계).
+
+**1. 사전 백업 (2장)** — MySQL 덤프, MinIO 버킷, Sealed Secrets 키, k3s 데이터스토어(4.10)를 맥으로
+
+**2. 값·시크릿을 Git에 확정** (GitHub에서 작업 → develop → main)
+- 1장에서 시점이 '배포 전'인 항목 확정·커밋 (특히 C5 Application 이름, C9 MetalLB 대역, C13 접속 방식, C14 외부 통신, C18 Notifications 컨트롤러)
+- 5장 시크릿 암호문 커밋: mysql-secret, minio-secret(기존 값 그대로), grafana-admin, alertmanager-slack, argocd-notifications-secret (full을 쓸 거면 MYSQL_REPLICATION_PASSWORD)
+- GitLab CI 변수: frontend `VITE_API_URL`·`VITE_GRAFANA_URL`(5.1), 4개 프로젝트 `SLACK_WEBHOOK_URL`(5.4), 앱 3개 `HELM_REPO_TOKEN`에 `api` 범위(C20)
+
+**3. 기존 Application 분리** (4.1의 1~2단계) — 리소스는 남기고 Application만 non-cascade 삭제. 이 시점부터 클러스터는 Git 변경을 따라가지 않는다
+
+**4. 노드 준비** (4.5) — k3s 내장 traefik·servicelb 끄기, Longhorn 선행 패키지, 디스크 노드 라벨, ai2 taint(4.2)
+
+**5. 코드를 GitLab main에 반영**
+- GitHub 각 레포에서 `develop` → `main` 머지 후 GitLab `main`에 push (ai, backend, frontend, helm, infra)
+- 앱 레포 main 파이프라인이 새 이미지(SHA 태그)를 빌드하고 helm 레포에 태그 MR을 만든다 → **GitLab에서 MR 머지**. frontend는 HTTPS 주소로 다시 빌드돼야 한다(4.4의 8)
+- 3단계에서 Application을 지웠으므로 아직 클러스터에는 반영되지 않는다
+
+**6. ingress-nginx 제거** (4.4의 1~2) — **여기서부터 외부 접속 중단**
+
+**7. ApplicationSet 부트스트랩** (4.1의 3~6) — `cluster-in-cluster.yaml`(dev) → `root.yaml`. 플랫폼·인프라·앱 Application이 한 번에 만들어지고, retry로 순서대로 수렴한다(4장 표). Traefik Ready → **접속 복구**
+- 새로 만들어지는 Application은 템플릿대로 prune·selfHeal이 켜진 상태라 4.12의 "항목 7 적용 시 1회" 절차는 필요 없다
+- ai-serving이 Rollout·ScaledObject CRD보다 먼저 sync돼 실패로 남으면 CRD 확인 후 `argocd app sync ai-serving` (4.13)
+- 기존 ai-serving 릴리스명이 달랐다면 C5 조치
+- 3단계에서 남겨 둔 옛 리소스 중 새 차트에 없는 것은 같은 릴리스명이면 prune된다. 남아 있는지 확인: `kubectl -n ai-serving get deploy,hpa` (Rollout으로 바뀌었으므로 `Deployment`·`HorizontalPodAutoscaler` `ai-serving-ai-serving`이 남아 있으면 Service가 옛 Pod까지 가리킨다 → 직접 삭제), `kubectl get deploy -n ingress-nginx`(6단계에서 삭제됨)
+
+**8. 스토리지 이전** (4.8) — mysql·minio를 local-path → Longhorn (다운타임)
+
+**9. 마무리**
+- 맥에 사설 CA 신뢰 등록 (4.6), `/etc/hosts`를 C13 방식에 맞게
+- k3s 데이터스토어 백업 cron (4.10), 외부 백업은 C16 확정 후 켠다(5.3)
+- 6.1 체크리스트(dev, cp1 1대) 확인
+
+**10. full 전환이 필요할 때** — 3노드를 켜고 4.3 절차 (Longhorn 복제 수, drain 순서), 6.2 체크리스트, C2·C21·C22 확인
+
+**되돌리기**: 7장. 단계별로 3단계 이전이면 GitLab main만 되돌리면 되고, 7단계 이후는 7장의 ApplicationSet·Traefik·스토리지 롤백을 따른다.
+
 ## 1. 확정 필요 항목
 
-코드에는 placeholder로 들어가 있다. 클러스터에서 값을 확인한 뒤 해당 파일을 고쳐 커밋한다.
+코드에는 placeholder로 들어가 있다. 클러스터에서 값을 확인한 뒤 해당 파일을 고쳐 커밋한다. **시점이 '배포 전'인 항목은 0.5장 2단계에서 모두 정한다.**
 
-| # | 항목 | 현재 값 (placeholder) | 위치 | 확인 방법 |
-|---|---|---|---|---|
-| C1 | k3s(Kubernetes) 버전 | `1.31.0` | `scripts/validate.sh` `K8S_VERSION` (helm, infra) | `kubectl version`. **Traefik 차트 42.x는 1.30 이상 필요**, Longhorn 1.12는 1.25 이상 |
-| C2 | ai-serving 메모리로 모델 로딩 가능 여부 | dev limits 1Gi(1~2개) / full limits 1.5Gi(1~3개) | `kim-minji-helm/ai-serving/values-dev.yaml`, `values-full.yaml` | dev 배포 후 OOMKilled·readiness 실패 여부, `kubectl top pod -n ai-serving`. 부족하면 limit을 올리고 8장 표 갱신 |
-| C3 | GitLab 이전 후 호스트 IP | repoURL은 `http://gitlab.local:8929/...` 유지, IP만 변경 | CoreDNS custom 설정(`gitlab.local` hosts, 현재 `192.168.0.157`) — 레포 밖 ConfigMap | 이전한 GitLab의 IP. 맥 호스트 컨테이너면 UTM 브리지에서 보이는 맥 IP |
-| C5 | 기존 ArgoCD Application 이름 (**ai-serving 주의**: backend values의 `AI_SERVER_URL`이 `kim-minji-ai-serving-ai-serving...`이라 현재 릴리스명이 `kim-minji-ai-serving`일 가능성이 높다. ApplicationSet은 `ai-serving` 릴리스로 Service `ai-serving-ai-serving`을 만들므로, 이름이 다르면 `AI_SERVER_URL`을 맞추거나 `releaseName`을 지정해야 backend→AI 호출이 된다. `kubectl -n ai-serving get svc`로 확인) | ApplicationSet이 차트명(`frontend`, `backend`, `ai-serving`, `mysql`, `minio`, `ingress`, `network-policy`, `coredns`, `node-local-dns`, `monitoring`, `loki`)으로 생성 | `argocd/apps/*.yaml` | `kubectl -n gitops get applications`. 이름이 다르면 4.1 절차에서 non-cascade 삭제. **앱 차트는 이름이 곧 Helm 릴리스명**이라, 다르면 리소스 이름·StatefulSet PVC가 새로 생겨 빈 DB/버킷으로 뜬다 → 해당 원소에 기존 릴리스명을 `releaseName`으로 지정하거나 2장 백업으로 데이터 이전 |
-| C6 | ArgoCD 버전 | `templatePatch`(v2.10+), `ignoreMissingValueFiles` 사용 | `argocd/apps/platform.yaml` | `argocd version` 또는 argocd-server 이미지 태그 |
-| C7 | VM 메모리 배분 | 8장 가정: cp1 8GB / w1 7GB / ai2 7GB | UTM 설정 | 8장 표와 `kubectl describe node` Allocatable |
-| C4 | 기존 Sealed Secrets controller 설치 방식·이름·네임스페이스 | `kube-system/sealed-secrets-controller` (가정) | `sealed-secrets/values.yaml` `fullnameOverride`, 릴리스 네임스페이스(`argocd/apps/platform.yaml`) | `kubectl get deploy -A \| grep sealed`, `helm list -A`. 다르면 값을 맞춘다 (키 Secret이 같은 네임스페이스에 있어야 재사용됨). 기존 Deployment selector가 `app.kubernetes.io/name: sealed-secrets, app.kubernetes.io/instance: sealed-secrets`가 아니면(예: controller.yaml로 설치 → `name: sealed-secrets-controller`) selector 불변 오류가 나므로 4.1 전에 `kubectl -n kube-system delete deploy sealed-secrets-controller` (키 Secret은 남는다). 기존 Helm 릴리스가 있으면 리소스를 지우지 않도록 릴리스 메타데이터 Secret(`sh.helm.release.v1.<릴리스>.*`)만 삭제하고 `helm uninstall`은 하지 않는다 |
-| C8 | 레포 밖 구성요소 실제 사용량 | 8장 추정치 | — | `kubectl top pod -A` (ArgoCD, k3s 내장 coredns·metrics-server·local-path, Longhorn instance-manager·CSI) |
-| C9 | **(4.1 전 필수)** MetalLB IP 대역 / Traefik LB IP | `PLACEHOLDER-IP-RANGE` | `metallb/values.yaml` `ipAddressPool.addresses` | 노드 IP(.57/.157/.240)·공유기 DHCP 범위와 겹치지 않는 대역(예: `192.168.0.200-192.168.0.209`). 할당된 Traefik IP는 `kubectl -n traefik get svc traefik`. UTM 브리지가 맥 Wi-Fi면 L2 광고(ARP)가 맥 외부로 안 나갈 수 있다 → 맥에서 `curl http://<LB IP>`로 확인, 안 되면 NodePort 32088 경로를 계속 쓴다 |
-| C10 | 기존 ingress-nginx 설치 방식·네임스페이스 | NetworkPolicy가 참조하던 `ingress-nginx` 네임스페이스 | — | `helm list -A \| grep ingress`, `kubectl get ns`. 4.4 전환 시 삭제 대상 |
-| C11 | k3s 내장 traefik·servicelb 사용 여부 | 둘 다 꺼야 함 | cp1 `/etc/rancher/k3s/config.yaml` | `kubectl -n kube-system get helmchart`(`traefik`, `traefik-crd` 없어야 함), `kubectl -n kube-system get ds \| grep svclb` |
-| C13 | 외부 접속 방식 (HTTPS) | LB IP 443 기준: Traefik 리다이렉트 `to: websecure`(→:443), frontend `https://api.wafer.local`, `https://grafana.wafer.local` | `traefik/values.yaml` `ports.web.http.redirections.entryPoint.to`, GitLab frontend CI 변수 `VITE_API_URL`·`VITE_GRAFANA_URL`(5.1), `kim-minji-frontend/.env` | C9의 MetalLB IP가 맥에서 접속되면 그대로. **NodePort로만 접속 가능하면** 4.7의 NodePort 리다이렉트 설정으로 바꾸고, frontend URL·Grafana `root_url`을 `https://*.wafer.local:32443`으로 바꾼다 (backend CORS는 두 경우 모두 허용) |
-| C14 | 앱 네임스페이스의 다른 Pod·외부 통신 | default-deny 대상: application, ai-serving, storage | `network-policy/templates/egress.yaml` | `kubectl get pod -n application -n ai-serving -n storage`로 frontend·backend·ai-serving·mysql·minio·backup Job 외의 Pod가 있는지, backend·ai-serving이 클러스터 밖(외부 API 등)을 호출하는지 확인. 있으면 egress 규칙 추가 |
-| C15 | GitLab Runner 인터넷 접근 (Trivy) | `aquasec/trivy:0.75.0` 이미지 pull, 취약점 DB(ghcr.io) 다운로드 | 앱 레포 `.gitlab-ci.yml` `image_scan` | Runner에서 `ghcr.io`, Docker Hub 접근 가능 여부. 막혀 있으면 job이 실패(allow_failure라 배포는 진행) |
-| C16 | 외부 S3 호환 백업 저장소 | `external.enabled: false`(클러스터 내 백업만), `https://PLACEHOLDER-S3-ENDPOINT`, `PLACEHOLDER-BUCKET`, Longhorn `backupTarget: ~` | `backup/values.yaml` `external.*`(확정 후 `enabled: true`), `longhorn/values.yaml` `longhorn.defaultBackupStore.backupTarget`·`recurringJobs.backup.enabled`, `network-policy/values.yaml` `backupExternalEgress.ports` | AWS S3·B2·R2·NAS·맥 호스트 MinIO 중 결정. **같은 맥의 디스크면 맥 고장 시 함께 사라진다**는 점을 고려. 엔드포인트 포트가 443·9000이 아니면 egress 포트 추가. Longhorn 형식: `s3://<bucket>@<region>/longhorn` |
-| C17 | k3s 데이터스토어 종류 | SQLite 가정 (server 1대) | RUNBOOK 4.10 | `ls /var/lib/rancher/k3s/server/db` — `state.db`면 SQLite, `etcd/`면 embedded etcd(`k3s etcd-snapshot` 사용) |
-| C18 | ArgoCD Notifications 컨트롤러·기존 설정 | 설치 시 함께 깔렸다고 가정, `argocd-notifications-cm`/`-secret`을 이어받음 | `argocd-notifications/` 차트 | `kubectl -n gitops get deploy argocd-notifications-controller`. 없으면 ArgoCD 설치 매니페스트(설치 버전과 같은 것)로 컨트롤러만 추가. 기존 cm에 직접 넣은 설정이 있으면 차트 values로 옮긴다 |
-| C19 | 백업 이미지 태그 | `mysql-backup:latest` + `imagePullPolicy: Always` (infra CI는 이제 커밋 SHA 태그로만 빌드) | `backup/values.yaml` `image`, `imagePullPolicy` | `backup/Dockerfile`을 바꿔 infra 파이프라인이 `mysql-backup:<sha>`를 push하면 그 SHA로 바꾸고 `IfNotPresent`로 커밋. 그전까지는 기존 `latest` 이미지를 쓴다 |
-| C20 | GitLab `HELM_REPO_TOKEN` 권한 | ai·backend·frontend CI 변수 | 각 레포 `update-helm.sh` | kim-minji-helm에 push + MR 생성이 가능해야 한다: Personal/Project Access Token 범위 `api`, `write_repository` (기존 토큰이 `write_repository`만이면 MR 생성 단계에서 401/403) |
-| C21 | ai-serving Pod당 처리량 | KEDA 기준 Pod당 `/predict` 2 rps | `kim-minji-helm/ai-serving/values.yaml` `keda.requestsPerSecondPerPod` | 부하 테스트(예: `hey -z 2m -c 4 -m POST -T application/json -d '{"bucket_name":"wafer-images","object_key":"<키>"}' https://ai.wafer.local/predict`)로 p95가 1초를 넘기 시작하는 rps를 찾고 그 70~80%로 정한다 |
-| C22 | backend 메모리 (full, OTel Java agent 포함) | limits 1Gi, `JAVA_OPTS=-XX:MaxRAMPercentage=75` | `kim-minji-helm/backend/values.yaml` `resources` | agent가 힙 밖 메모리를 50~100Mi 더 쓴다. full 배포 후 OOMKilled·GC 시간 확인, 부족하면 limit 상향 |
-| C23 | cp1·w1 디스크 여유 (Longhorn) | full 복제 2 기준 볼륨 합계 70Gi → 노드당 35Gi + 여유 | Longhorn 노드 디스크 (`/var/lib/longhorn`) | `df -h /var/lib/longhorn`, Longhorn UI의 노드 Schedulable 용량. 부족하면 VM 디스크 확장 또는 PVC 크기(mysql·minio 10Gi) 축소 |
-| C12 | VM vCPU 수 | dev는 cp1 1대에 CPU requests ~2.1~2.4 core + instance-manager 예약(5%)이 몰린다 → **cp1 3 vCPU 이상** 권장. full instance-manager는 노드마다 8% | UTM 설정 | `kubectl describe node` Capacity·Allocated resources |
+| # | 시점 | 항목 | 현재 값 (placeholder) | 위치 | 확인 방법 |
+|---|---|---|---|---|---|
+| C1 | 배포 전 | k3s(Kubernetes) 버전 | `1.31.0` | `scripts/validate.sh` `K8S_VERSION` (helm, infra) | `kubectl version`. **Traefik 차트 42.x는 1.30 이상 필요**, Longhorn 1.12는 1.25 이상 |
+| C2 | 배포 후 | ai-serving 메모리로 모델 로딩 가능 여부 | dev limits 1Gi(1~2개) / full limits 1.5Gi(1~3개) | `kim-minji-helm/ai-serving/values-dev.yaml`, `values-full.yaml` | dev 배포 후 OOMKilled·readiness 실패 여부, `kubectl top pod -n ai-serving`. 부족하면 limit을 올리고 8장 표 갱신 |
+| C3 | 배포 전 | GitLab 이전 후 호스트 IP | repoURL은 `http://gitlab.local:8929/...` 유지, IP만 변경 | CoreDNS custom 설정(`gitlab.local` hosts, 현재 `192.168.0.157`) — 레포 밖 ConfigMap | 이전한 GitLab의 IP. 맥 호스트 컨테이너면 UTM 브리지에서 보이는 맥 IP |
+| C4 | 배포 전 | 기존 Sealed Secrets controller 설치 방식·이름·네임스페이스 | `kube-system/sealed-secrets-controller` (가정) | `sealed-secrets/values.yaml` `fullnameOverride`, 릴리스 네임스페이스(`argocd/apps/platform.yaml`) | `kubectl get deploy -A \| grep sealed`, `helm list -A`. 다르면 값을 맞춘다 (키 Secret이 같은 네임스페이스에 있어야 재사용됨). 기존 Deployment selector가 `app.kubernetes.io/name: sealed-secrets, app.kubernetes.io/instance: sealed-secrets`가 아니면(예: controller.yaml로 설치 → `name: sealed-secrets-controller`) selector 불변 오류가 나므로 4.1 전에 `kubectl -n kube-system delete deploy sealed-secrets-controller` (키 Secret은 남는다). 기존 Helm 릴리스가 있으면 리소스를 지우지 않도록 릴리스 메타데이터 Secret(`sh.helm.release.v1.<릴리스>.*`)만 삭제하고 `helm uninstall`은 하지 않는다 |
+| C5 | 배포 전 | 기존 ArgoCD Application 이름 (**ai-serving 주의**: backend values의 `AI_SERVER_URL`이 `kim-minji-ai-serving-ai-serving...`이라 현재 릴리스명이 `kim-minji-ai-serving`일 가능성이 높다. ApplicationSet은 `ai-serving` 릴리스로 Service `ai-serving-ai-serving`을 만들므로, 이름이 다르면 `AI_SERVER_URL`을 맞추거나 `releaseName`을 지정해야 backend→AI 호출이 된다. `kubectl -n ai-serving get svc`로 확인) | ApplicationSet이 차트명(`frontend`, `backend`, `ai-serving`, `mysql`, `minio`, `ingress`, `network-policy`, `coredns`, `node-local-dns`, `monitoring`, `loki`)으로 생성 | `argocd/apps/*.yaml` | `kubectl -n gitops get applications`. 이름이 다르면 4.1 절차에서 non-cascade 삭제. **앱 차트는 이름이 곧 Helm 릴리스명**이라, 다르면 리소스 이름·StatefulSet PVC가 새로 생겨 빈 DB/버킷으로 뜬다 → 해당 원소에 기존 릴리스명을 `releaseName`으로 지정하거나 2장 백업으로 데이터 이전 |
+| C6 | 배포 전 | ArgoCD 버전 | `templatePatch`(v2.10+), `ignoreMissingValueFiles` 사용 | `argocd/apps/platform.yaml` | `argocd version` 또는 argocd-server 이미지 태그 |
+| C7 | 배포 전 | VM 메모리 배분 | 8장 가정: cp1 8GB / w1 7GB / ai2 7GB | UTM 설정 | 8장 표와 `kubectl describe node` Allocatable |
+| C8 | 배포 후 | 레포 밖 구성요소 실제 사용량 | 8장 추정치 | — | `kubectl top pod -A` (ArgoCD, k3s 내장 coredns·metrics-server·local-path, Longhorn instance-manager·CSI) |
+| C9 | 배포 전 | **(4.1 전 필수)** MetalLB IP 대역 / Traefik LB IP | `PLACEHOLDER-IP-RANGE` | `metallb/values.yaml` `ipAddressPool.addresses` | 노드 IP(.57/.157/.240)·공유기 DHCP 범위와 겹치지 않는 대역(예: `192.168.0.200-192.168.0.209`). 할당된 Traefik IP는 `kubectl -n traefik get svc traefik`. UTM 브리지가 맥 Wi-Fi면 L2 광고(ARP)가 맥 외부로 안 나갈 수 있다 → 맥에서 `curl http://<LB IP>`로 확인, 안 되면 NodePort 32088 경로를 계속 쓴다 |
+| C10 | 배포 전 | 기존 ingress-nginx 설치 방식·네임스페이스 | 설치 가이드: 공식 정적 매니페스트(`ingress-nginx/main/deploy/static/provider/cloud/deploy.yaml`), 네임스페이스 `ingress-nginx` | — | `kubectl get ns ingress-nginx`, `helm list -A \| grep ingress`(Helm이 아니면 비어 있음). 4.4 전환 시 같은 매니페스트로 `kubectl delete -f` |
+| C11 | 배포 전 | k3s 내장 traefik·servicelb 사용 여부 | 둘 다 꺼야 함 | cp1 `/etc/rancher/k3s/config.yaml` | `kubectl -n kube-system get helmchart`(`traefik`, `traefik-crd` 없어야 함), `kubectl -n kube-system get ds \| grep svclb` |
+| C12 | 배포 전 | VM vCPU 수 | dev는 cp1 1대에 CPU requests ~2.1~2.4 core + instance-manager 예약(5%)이 몰린다 → **cp1 3 vCPU 이상** 권장. full instance-manager는 노드마다 8% | UTM 설정 | `kubectl describe node` Capacity·Allocated resources |
+| C13 | 배포 전 | 외부 접속 방식 (HTTPS) | LB IP 443 기준: Traefik 리다이렉트 `to: websecure`(→:443), frontend `https://api.wafer.local`, `https://grafana.wafer.local` | `traefik/values.yaml` `ports.web.http.redirections.entryPoint.to`, GitLab frontend CI 변수 `VITE_API_URL`·`VITE_GRAFANA_URL`(5.1), `kim-minji-frontend/.env` | C9의 MetalLB IP가 맥에서 접속되면 그대로. **NodePort로만 접속 가능하면** 4.7의 NodePort 리다이렉트 설정으로 바꾸고, frontend URL·Grafana `root_url`을 `https://*.wafer.local:32443`으로 바꾼다 (backend CORS는 두 경우 모두 허용) |
+| C14 | 배포 전 | 앱 네임스페이스의 다른 Pod·외부 통신 | default-deny 대상: application, ai-serving, storage | `network-policy/templates/egress.yaml` | `kubectl get pod -n application -n ai-serving -n storage`로 frontend·backend·ai-serving·mysql·minio·backup Job 외의 Pod가 있는지, backend·ai-serving이 클러스터 밖(외부 API 등)을 호출하는지 확인. 있으면 egress 규칙 추가 |
+| C15 | 배포 전 | GitLab Runner 인터넷 접근 (Trivy) | `aquasec/trivy:0.75.0` 이미지 pull, 취약점 DB(ghcr.io) 다운로드 | 앱 레포 `.gitlab-ci.yml` `image_scan` | Runner에서 `ghcr.io`, Docker Hub 접근 가능 여부. 막혀 있으면 job이 실패(allow_failure라 배포는 진행) |
+| C16 | 언제든 (선택) | 외부 S3 호환 백업 저장소 | `external.enabled: false`(클러스터 내 백업만), `https://PLACEHOLDER-S3-ENDPOINT`, `PLACEHOLDER-BUCKET`, Longhorn `backupTarget: ~` | `backup/values.yaml` `external.*`(확정 후 `enabled: true`), `longhorn/values.yaml` `longhorn.defaultBackupStore.backupTarget`·`recurringJobs.backup.enabled`, `network-policy/values.yaml` `backupExternalEgress.ports` | AWS S3·B2·R2·NAS·맥 호스트 MinIO 중 결정. **같은 맥의 디스크면 맥 고장 시 함께 사라진다**는 점을 고려. 엔드포인트 포트가 443·9000이 아니면 egress 포트 추가. Longhorn 형식: `s3://<bucket>@<region>/longhorn` |
+| C17 | 배포 전 | k3s 데이터스토어 종류 | SQLite 가정 (server 1대) | RUNBOOK 4.10 | `ls /var/lib/rancher/k3s/server/db` — `state.db`면 SQLite, `etcd/`면 embedded etcd(`k3s etcd-snapshot` 사용) |
+| C18 | 배포 전 | ArgoCD Notifications 컨트롤러·기존 설정 | 설치 시 함께 깔렸다고 가정, `argocd-notifications-cm`/`-secret`을 이어받음 | `argocd-notifications/` 차트 | `kubectl -n gitops get deploy argocd-notifications-controller`. 없으면 ArgoCD 설치 매니페스트(설치 버전과 같은 것)로 컨트롤러만 추가. 기존 cm에 직접 넣은 설정이 있으면 차트 values로 옮긴다 |
+| C19 | 이미지 변경 시 | 백업 이미지 태그 | `mysql-backup:latest` + `imagePullPolicy: Always` (infra CI는 이제 커밋 SHA 태그로만 빌드) | `backup/values.yaml` `image`, `imagePullPolicy` | `backup/Dockerfile`을 바꿔 infra 파이프라인이 `mysql-backup:<sha>`를 push하면 그 SHA로 바꾸고 `IfNotPresent`로 커밋. 그전까지는 기존 `latest` 이미지를 쓴다 |
+| C20 | 배포 전 | GitLab `HELM_REPO_TOKEN` 권한 | ai·backend·frontend CI 변수 | 각 레포 `update-helm.sh` | kim-minji-helm에 push + MR 생성이 가능해야 한다: Personal/Project Access Token 범위 `api`, `write_repository` (기존 토큰이 `write_repository`만이면 MR 생성 단계에서 401/403) |
+| C21 | 배포 후 | ai-serving Pod당 처리량 | KEDA 기준 Pod당 `/predict` 2 rps | `kim-minji-helm/ai-serving/values.yaml` `keda.requestsPerSecondPerPod` | 부하 테스트(예: `hey -z 2m -c 4 -m POST -T application/json -d '{"bucket_name":"wafer-images","object_key":"<키>"}' https://ai.wafer.local/predict`)로 p95가 1초를 넘기 시작하는 rps를 찾고 그 70~80%로 정한다 |
+| C22 | 배포 후 | backend 메모리 (full, OTel Java agent 포함) | limits 1Gi, `JAVA_OPTS=-XX:MaxRAMPercentage=75` | `kim-minji-helm/backend/values.yaml` `resources` | agent가 힙 밖 메모리를 50~100Mi 더 쓴다. full 배포 후 OOMKilled·GC 시간 확인, 부족하면 limit 상향 |
+| C23 | 배포 전 | cp1·w1 디스크 여유 (Longhorn) | full 복제 2 기준 볼륨 합계 70Gi → 노드당 35Gi + 여유 | Longhorn 노드 디스크 (`/var/lib/longhorn`) | `df -h /var/lib/longhorn`, Longhorn UI의 노드 Schedulable 용량. 부족하면 VM 디스크 확장 또는 PVC 크기(mysql·minio 10Gi) 축소 |
+| C24 | 배포 전 | 현재 CNI 구성 (Calico) | 설치 가이드: k3s 기본 설치 후 Calico v3.26.1 매니페스트 적용 | 레포 밖 (B안 재설치 시) | `kubectl get pods -n kube-system -l k8s-app=calico-node`, `cat /etc/rancher/k3s/config.yaml`(`flannel-backend: none` 여부). NetworkPolicy(항목 3)는 Calico가 집행한다. B안이면 같은 구성으로 재현해야 한다 |
 
 ## 2. 사전 백업
 
@@ -79,11 +122,50 @@ kill %1
 | A. 기존 클러스터 유지 (권장) | 플랫폼 구성요소를 ArgoCD로 추가하고, 스토리지만 local-path → Longhorn으로 데이터 이전 | 다운타임 최소, 기존 SealedSecret 키 유지 | 설정 잔재(수동 설치한 ingress 등) 정리 필요 |
 | B. 새로 설치 | 3대 모두 k3s 재설치 → 처음부터 GitOps로 구성 | 깨끗한 상태, 설치 순서 검증 가능 | Sealed Secrets 키가 바뀌어 **모든 SealedSecret 재암호화** 필요(기존 키를 백업해 복원하면 회피 가능), 데이터 복원 필요 |
 
-A안 절차: 4.5 노드 준비 → C9 확정·커밋 → 4.4 ingress-nginx 제거 → 4.1 ApplicationSet 전환(Traefik 포함) → (항목 4) 스토리지 이전. B안 세부 절차는 항목 10에서 정리한다.
+A안 절차는 0.5장.
+
+### 3.1 B안: 새로 설치
+
+전체 다운타임이 생긴다. 레포 밖에 있던 것(ArgoCD 설치, CNI, GitLab 레지스트리 Secret, CoreDNS custom 설정)을 다시 만들어야 한다.
+
+1. **백업** (2장 전부) + 레포 밖 리소스 내보내기
+   ```bash
+   kubectl -n kube-system get secret -l sealedsecrets.bitnami.com/sealed-secrets-key -o yaml > sealed-secrets-key-backup.yaml
+   kubectl -n kube-system get cm coredns-custom -o yaml > coredns-custom.yaml 2>/dev/null   # gitlab.local hosts (C3)
+   for ns in application ai-serving storage; do kubectl -n $ns get secret gitlab-registry-secret -o yaml > gitlab-registry-secret-$ns.yaml; done
+   ```
+2. **k3s 재설치** (C1 버전, C24 CNI 구성과 같게). 예: Calico를 쓸 경우
+   ```bash
+   # cp1
+   curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION=<C1> sh -s - server \
+     --disable traefik --disable servicelb --flannel-backend=none --disable-network-policy
+   sudo cat /var/lib/rancher/k3s/server/node-token
+   # w1, ai2
+   curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION=<C1> K3S_URL=https://192.168.0.57:6443 K3S_TOKEN=<token> sh -
+   # CNI (기존과 같은 버전 또는 검증한 최신 버전)
+   kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/<버전>/manifests/calico.yaml
+   ```
+3. **노드 준비** (4.5의 패키지·라벨, 4.2 taint). k3s 설정은 2단계 플래그로 이미 반영
+4. **Sealed Secrets 키 복원** — 컨트롤러가 뜨기 **전에** 넣어야 기존 SealedSecret 암호문을 그대로 쓴다
+   ```bash
+   kubectl apply -f sealed-secrets-key-backup.yaml
+   ```
+   (키를 잃었다면 5장의 모든 시크릿을 새 키로 다시 암호화해 커밋한다)
+5. **레포 밖 리소스 복원**: `coredns-custom.yaml`(GitLab IP를 C3 값으로), 네임스페이스 생성 후 `gitlab-registry-secret-*.yaml` 적용 (`metadata.resourceVersion`·`uid` 줄은 지우고)
+6. **ArgoCD 설치** (C6: v2.10 이상, 네임스페이스 `gitops`) + GitLab 레포 접근 설정
+   ```bash
+   kubectl create namespace gitops
+   kubectl apply -n gitops -f https://raw.githubusercontent.com/argoproj/argo-cd/<v2.10 이상 버전>/manifests/install.yaml
+   # GitLab 레포가 비공개면 repository Secret 등록 (argocd repo add http://gitlab.local:8929/root/kim-minji-infra.git --username ... --password ...)
+   ```
+7. **부트스트랩**: `kubectl apply -f argocd/bootstrap/cluster-in-cluster.yaml` → `kubectl apply -f argocd/bootstrap/root.yaml` (4장 표 순서로 수렴). ingress-nginx·기존 Application 정리는 필요 없다
+8. **데이터 복원**: mysql·minio가 Longhorn PVC로 뜬 뒤 4.8의 6~7단계(덤프 복원, `mc mirror`)
+9. **마무리**: 0.5장 9단계와 같다
+
 
 ## 4. 설치·배포 순서
 
-큰 순서 (sync wave로 자동화하는 부분은 항목 7에서 보완):
+큰 순서 (0.5장의 단계와 같은 내용을 작업 단위로 묶은 것):
 
 1. 노드 준비·k3s 설정 (4.5) — 내장 traefik·servicelb 비활성화, Longhorn 선행 패키지, 디스크 노드 라벨, ai2 taint(4.2)
 2. **C9(MetalLB IP 대역)를 확정해 커밋** — placeholder 상태로 4.1을 하면 metallb sync가 webhook에서 거부되고, Traefik LoadBalancer에 IP가 없어 traefik·ingress·monitoring 앱이 계속 Progressing으로 남는다
@@ -111,7 +193,7 @@ A안 절차: 4.5 노드 준비 → C9 확정·커밋 → 4.4 ingress-nginx 제�
 
 기존 개별 Application(coredns, loki, monitoring, node-local-dns 및 클러스터에만 있는 앱 Application)을 ApplicationSet이 만드는 Application으로 바꾼다. 리소스는 지우지 않는다.
 
-**선행 조건**: 4.5 완료, C9 커밋 완료, 4.4(ingress-nginx 제거) 완료. ApplicationSet이 traefik·ingress·network-policy를 동시에 만들기 때문에, ingress-nginx가 남아 있으면 NodePort 32088 충돌로 traefik sync가 실패하고 Ingress·NetworkPolicy만 traefik 기준으로 바뀌어 접속이 끊긴다.
+**순서**: 1~2단계(기존 Application 분리)는 0.5장 3단계에서 GitLab 반영 **전에** 먼저 한다. 3단계 이후의 선행 조건은 4.5 완료, C9 커밋 완료, 4.4(ingress-nginx 제거) 완료다. ApplicationSet이 traefik·ingress·network-policy를 동시에 만들기 때문에, ingress-nginx가 남아 있으면 NodePort 32088 충돌로 traefik sync가 실패하고 Ingress·NetworkPolicy만 traefik 기준으로 바뀌어 접속이 끊긴다.
 
 1. 기존 Application 목록 확인 (C5): `kubectl -n gitops get applications`
 2. 기존 Application을 **리소스는 남기고** 삭제 (finalizer 제거 후 삭제 = non-cascade). 대상에 기존 `backup` Application도 포함한다 (platform ApplicationSet의 `backup` 차트가 같은 이름의 CronJob을 이어받는다)
@@ -174,7 +256,11 @@ ingress-nginx는 2026년 3월 유지보수가 끝나 Traefik으로 교체했다.
 **4.1보다 먼저** 1~2단계를 수행한다.
 
 1. k3s 내장 traefik이 꺼져 있는지 확인 (C11, 4.5): `kubectl -n kube-system get helmchart`에 `traefik`, `traefik-crd`가 없어야 한다. 남아 있으면 IngressClass `traefik` 이름이 겹친다
-2. 기존 ingress-nginx 제거 (C10): `helm -n ingress-nginx uninstall <릴리스>` 또는 설치 매니페스트로 삭제 → NodePort 32088 해제
+2. 기존 ingress-nginx 제거 (C10): 설치에 쓴 정적 매니페스트로 삭제 → NodePort 32088 해제
+   ```bash
+   kubectl delete -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/cloud/deploy.yaml
+   ```
+   (`main`의 매니페스트가 설치 당시와 달라 일부가 안 지워지면 `kubectl delete ns ingress-nginx` 와 `kubectl delete ingressclass nginx`, `kubectl delete validatingwebhookconfiguration ingress-nginx-admission`)
 3. 4.1 진행 → `kubectl -n traefik get svc traefik`에서 NodePort 32088·EXTERNAL-IP(C9 대역) 확인
 4. Ingress class 확인: `kubectl get ingress -A` (모두 `traefik`)
 5. 맥에서 `curl -H 'Host: app.wafer.local' http://192.168.0.57:32088/` 응답 확인 (항목 3 이후에는 308 리다이렉트가 정상. HTTPS 확인은 `curl -k --resolve app.wafer.local:32443:192.168.0.57 https://app.wafer.local:32443/`). LB IP를 쓰려면 `/etc/hosts`의 `*.wafer.local`을 Traefik EXTERNAL-IP로 바꾸고 포트 없이 접속 (UTM 브리지가 Wi-Fi면 L2 ARP가 맥 밖으로는 안 나갈 수 있다 — C9)
@@ -390,7 +476,7 @@ kubectl argo rollouts retry rollout ai-serving-ai-serving -n ai-serving
 
 | 시크릿 | 네임스페이스 | 위치 | 상태 |
 |---|---|---|---|
-| `mysql-secret` (4개 키) | storage | `kim-minji-helm/mysql/values.yaml` `sealedSecret.encryptedData` | helm#3. **현재 클러스터 값 그대로** 암호화 (kim-minji-helm README) |
+| `mysql-secret` (4개 키) | storage | `kim-minji-helm/mysql/values.yaml` `sealedSecret.encryptedData` | **현재 클러스터 값 그대로** 암호화 (kim-minji-helm README) |
 | `minio-secret` (`accessKey`, `secretKey`) | storage | `kim-minji-helm/minio/values.yaml` `sealedSecret.encryptedData` | **현재 클러스터 값 그대로** 암호화, 기존 Secret annotate (kim-minji-helm README) |
 | `grafana-admin` (`admin-user`, `admin-password`) | monitoring | `kim-minji-infra/monitoring/values.yaml` `grafanaAdmin.sealedSecret.encryptedData` | 새 비밀번호로 생성 (아래 5.2) |
 | `mysql-secret`의 `MYSQL_REPLICATION_PASSWORD` | storage | 위와 같은 위치에 키 추가 | full(replica)에서만 필요. 새 값 (kim-minji-helm README) |
@@ -402,6 +488,8 @@ kubectl argo rollouts retry rollout ai-serving-ai-serving -n ai-serving
 
 - mysql·minio·grafana-admin은 값이 비어 있으면 **렌더링이 실패**한다 (평문 배포 방지). ArgoCD 앱이 `ComparisonError`로 멈추고 기존 리소스는 그대로 남는다. 4.1 전에 모두 채워 커밋한다.
 - 백업 CronJob은 `mysql-secret`, `minio-secret`을 그대로 참조하므로 별도 시크릿이 없다.
+- `backend-secret`은 이미 SealedSecret으로 레포에 있다 (기존 키로 복호화).
+- **레포 밖 Secret**: `gitlab-registry-secret`(application, ai-serving, storage — 이미지 pull)은 수동으로 만든 docker-registry Secret이다. A안은 그대로 두고, B안은 3.1의 1·5단계로 옮긴다. GitLab 레지스트리 계정이 바뀌면 `kubectl create secret docker-registry gitlab-registry-secret --docker-server=gitlab.local:5050 --docker-username=... --docker-password=... -n <ns>`로 다시 만든다
 
 ### 5.1 GitLab CI 변수 (frontend 프로젝트, 시크릿 아님)
 
@@ -468,7 +556,7 @@ printf '    slack-webhook-url: %s\n' "$(seal "$URL" gitops argocd-notifications-
 
 ## 6. 배포 후 확인 체크리스트
 
-작성 예정 (항목 2~9에서 계속 추가). 노드 1대(cp1만) / 3대 켠 상태로 나눠 확인한다.
+노드 1대(cp1만, dev) / 3대(full) 켠 상태로 나눠 확인한다. 항목 번호는 해당 기능이 들어간 작업이다.
 
 ### 6.1 dev, cp1 1대만 켠 상태
 
@@ -679,3 +767,53 @@ full (`--nodes 3`):
 | traefik | Deployment | traefik | 2 | 50m · 64Mi | 100m | 128Mi |
 | **합계** | | | | | **3335m** | **6.94Gi** |
 | **HPA 최대치 기준** | | | | | **4335m** | **8.94Gi** |
+
+## 9. 정적 검증 결과 (클러스터 없이, 2026-10-27)
+
+GitHub `develop`(항목 0~9 머지 후)에서 `scripts/validate.sh`를 실행한 결과. 클러스터 접속 검증(`kubectl --dry-run=server` 등)은 범위 밖이라 하지 않았다.
+
+| 검사 | 도구 | 결과 |
+|---|---|---|
+| 차트 문법·렌더링 (dev, full) | `helm lint`, `helm template` (helm 3) | 전체 통과 |
+| 스키마 | `kubeconform -strict` (k8s 1.31 스키마, CRD는 datreeio CRDs-catalog) | 렌더링 리소스 759개 중 유효 657, **무효 0**, 나머지 102개는 CRD 정의 자체(스키마 대상 아님) |
+| YAML 형식 | `yamllint` (relaxed) | values·raw 매니페스트 전체 통과 |
+| 알림·SLO 규칙 | `promtool check rules` | 서비스 규칙 6개, SLO 규칙 28개 통과 |
+| SLO 규칙 단위 테스트 | `promtool test rules` | 5xx 없음 → 가용성 오류율 0 기록 / 5xx 10% → `SLOErrorBudgetBurnFast` critical (라벨·문구 일치) |
+| Alertmanager 설정 | `amtool check-config`, `amtool config routes test` | dev: 꺼 둔 w1·ai2 노드 알림·노드별 TargetDown → null, 그 외 → slack / full: 모두 slack, Watchdog·storage KubeJobFailed → null |
+| 앱 계측 | 로컬 FastAPI + opentelemetry-instrument | `traceparent` 전달 시 같은 trace_id로 span 생성, `/metrics` 지연 버킷 0.1~10초 |
+| 백업·복제 스크립트 | `bash -n`, 로컬 실행 | 백업·복원 검증·복제 설정 Job 문법 통과, URL 인코딩·CI 알림 JSON 이스케이프 동작 확인 |
+| 앱 코드 | frontend `npm run build`, backend `./gradlew compileJava` | 통과 (frontend lint는 ESLint 9 설정 파일 부재로 기존부터 실행 불가, backend 컨텍스트 테스트는 DB 필요로 기존부터 실패) |
+
+차트 × 프로파일별 렌더링 리소스 수 (괄호: kubeconform 유효 / CRD 정의):
+
+| 레포 | 차트 | dev | full |
+|---|---|---|---|
+| helm | `frontend` | 3 (유효 3) | 4 (유효 4) |
+| helm | `backend` | 5 (유효 5) | 6 (유효 6) |
+| helm | `ai-serving` | 5 (유효 5) | 6 (유효 6) |
+| helm | `mysql` | 6 (유효 6) | 9 (유효 9) |
+| helm | `minio` | 3 (유효 3) | 3 (유효 3) |
+| infra | `sealed-secrets` | 10 (유효 10) | 10 (유효 10) |
+| infra | `metallb` | 27 (유효 18, CRD 정의 9) | 27 (유효 18, CRD 정의 9) |
+| infra | `cert-manager` | 49 (유효 43, CRD 정의 6) | 49 (유효 43, CRD 정의 6) |
+| infra | `longhorn` | 53 (유효 28, CRD 정의 25) | 53 (유효 28, CRD 정의 25) |
+| infra | `traefik` | 6 (유효 6) | 7 (유효 7) |
+| infra | `keda` | 29 (유효 23, CRD 정의 6) | 29 (유효 23, CRD 정의 6) |
+| infra | `argo-rollouts` | 14 (유효 9, CRD 정의 5) | 14 (유효 9, CRD 정의 5) |
+| infra | `coredns` | SSA 부분 패치 (스키마 생략) | SSA 부분 패치 (스키마 생략) |
+| infra | `node-local-dns` | 6 (유효 6) | 6 (유효 6) |
+| infra | `monitoring` | 115 (유효 115) | 115 (유효 115) |
+| infra | `loki` | 15 (유효 15) | 15 (유효 15) |
+| infra | `tempo` | 0 (유효 0) | 4 (유효 4) |
+| infra | `otel-collector` | 0 (유효 0) | 4 (유효 4) |
+| infra | `ingress` | 2 (유효 2) | 2 (유효 2) |
+| infra | `network-policy` | 16 (유효 16) | 16 (유효 16) |
+| infra | `backup` | 4 (유효 4) | 4 (유효 4) |
+| infra | `argocd-notifications` | 2 (유효 2) | 2 (유효 2) |
+| infra | `argocd` (raw) | 4 (유효 4) | |
+
+- dev의 tempo·otel-collector가 0인 것은 의도된 동작이다 (full 전용, chart condition)
+- coredns는 k3s가 만든 Deployment에 replica·분산만 덧씌우는 SSA 부분 매니페스트라 단독 스키마 검증 대상이 아니다
+- 재현: `brew install helm kubeconform yamllint prometheus` 후 각 레포에서 `scripts/validate.sh`
+
+**클러스터에서만 확인 가능한 것**은 1장의 C 항목(특히 C2·C8·C21·C22 '배포 후')과 6장 체크리스트로 남겼다.
