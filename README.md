@@ -174,17 +174,19 @@ monitoring 네임스페이스
 ## ▍ArgoCD syncPolicy
 
 ```yaml
-# platform ApplicationSet(coredns, node-local-dns, network-policy, ingress, monitoring, loki), backup
+# platform(이 레포 차트), apps(kim-minji-helm 차트) ApplicationSet 공통
 syncPolicy:
   automated:
-    prune: true       # 불필요한 리소스 자동 삭제
+    prune: true       # Git에서 지운 리소스 자동 삭제
     selfHeal: true    # 수동 변경 감지 시 자동 복구
   syncOptions:
     - CreateNamespace=true
-    - ServerSideApply=true  # coredns(부분 패치), monitoring(CRD 크기) — templatePatch로 적용
+    - ServerSideApply=true  # coredns(부분 패치), CRD가 큰 차트 — templatePatch로 적용
+  retry: { limit: 5, backoff: { duration: 10s, factor: 2, maxDuration: 3m } }
 ```
 
-인프라 리소스는 Git 상태를 더 엄격하게 강제합니다.
+- 앱 사이 배포 순서는 강제하지 않고 retry로 수렴합니다 (기대 순서와 확인 방법은 RUNBOOK 4장).
+- 유지보수 중에는 Application별로 자동 sync를 잠시 끌 수 있습니다 (`ignoreApplicationDifferences`, RUNBOOK 4.12).
 
 ---
 
