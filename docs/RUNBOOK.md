@@ -75,6 +75,8 @@ git -C <GitLab kim-minji-infra·helm 클론> rev-parse HEAD   # 반영 전 main 
 
 **12. full 전환이 필요할 때** — 3노드를 켜고 4.3 절차 (Longhorn 복제 수, drain 순서), 6.2 체크리스트, C2·C21·C22 확인
 
+**13. (선택) Istio Outlier Detection 실험** — dev, cp1+ai2. 4.15 절차. 끝나면 `experiment` 라벨을 지워 원래 구성으로 돌린다
+
 **되돌리기**:
 - 4~8단계 사이(클러스터는 옛 리소스로 동작 중): 1단계에서 내보낸 `argocd-applications-before.yaml`을 다시 적용하되, 각 Application의 `targetRevision`을 1단계에서 기록한 **반영 전 커밋 SHA**로 바꿔서 적용한다 (`HEAD`로 두면 새 코드를 따라간다). 또는 GitLab main을 revert 커밋으로 되돌린다 (force-push 금지)
 - 9단계 이후: 7장의 ApplicationSet·Traefik·스토리지 롤백
@@ -89,7 +91,7 @@ git -C <GitLab kim-minji-infra·helm 클론> rev-parse HEAD   # 반영 전 main 
 | C2 | 배포 후 | ai-serving 메모리로 모델 로딩 가능 여부 | dev limits 1Gi(1~2개) / full limits 1.5Gi(1~3개) | `kim-minji-helm/ai-serving/values-dev.yaml`, `values-full.yaml` | dev 배포 후 OOMKilled·readiness 실패 여부, `kubectl top pod -n ai-serving`. 부족하면 limit을 올리고 8장 표 갱신 |
 | C3 | 배포 전 | GitLab 이전 후 호스트 IP | repoURL은 `http://gitlab.local:8929/...` 유지, IP만 변경 | CoreDNS custom 설정(`kube-system/coredns-custom`, `gitlab.local` hosts, 현재 `192.168.0.157`), **모든 노드**의 `/etc/hosts`·`/etc/rancher/k3s/registries.yaml` — 레포 밖 (0.5장 3단계) | 이전한 GitLab의 IP. 맥 호스트 컨테이너면 UTM 브리지에서 보이는 맥 IP |
 | C4 | 배포 전 | 기존 Sealed Secrets controller 설치 방식·이름·네임스페이스 | `kube-system/sealed-secrets-controller` (가정) | `sealed-secrets/values.yaml` `fullnameOverride`, 릴리스 네임스페이스(`argocd/apps/platform.yaml`) | `kubectl get deploy -A \| grep sealed`, `helm list -A`. 다르면 값을 맞춘다 (키 Secret이 같은 네임스페이스에 있어야 재사용됨). 기존 Deployment selector가 `app.kubernetes.io/name: sealed-secrets, app.kubernetes.io/instance: sealed-secrets`가 아니면(예: controller.yaml로 설치 → `name: sealed-secrets-controller`) selector 불변 오류가 나므로 4.1 전에 `kubectl -n kube-system delete deploy sealed-secrets-controller` (키 Secret은 남는다). 기존 Helm 릴리스가 있으면 리소스를 지우지 않도록 릴리스 메타데이터 Secret(`sh.helm.release.v1.<릴리스>.*`)만 삭제하고 `helm uninstall`은 하지 않는다 |
-| C5 | 배포 전 | 기존 ArgoCD Application 이름 (**ai-serving 주의**: backend values의 `AI_SERVER_URL`이 `kim-minji-ai-serving-ai-serving...`이라 현재 릴리스명이 `kim-minji-ai-serving`일 가능성이 높다. ApplicationSet은 `ai-serving` 릴리스로 Service `ai-serving-ai-serving`을 만들므로, 이름이 다르면 `AI_SERVER_URL`을 맞추거나 `releaseName`을 지정해야 backend→AI 호출이 된다. `kubectl -n ai-serving get svc`로 확인) | ApplicationSet이 차트명으로 생성 — apps: `mysql`, `minio`, `backend`, `ai-serving`, `frontend` / platform: `sealed-secrets`, `metallb`, `cert-manager`, `longhorn`, `traefik`, `keda`, `argo-rollouts`, `coredns`, `node-local-dns`, `network-policy`, `ingress`, `monitoring`, `loki`, `tempo`, `otel-collector`, `backup`, `argocd-notifications` | `argocd/apps/*.yaml` | `kubectl -n gitops get applications`. 이름이 다르면 4.1 절차에서 non-cascade 삭제. **앱 차트는 이름이 곧 Helm 릴리스명**이라, 다르면 리소스 이름·StatefulSet PVC가 새로 생겨 빈 DB/버킷으로 뜬다 → 해당 원소에 기존 릴리스명을 `releaseName`으로 지정하거나 2장 백업으로 데이터 이전 |
+| C5 | 배포 전 | 기존 ArgoCD Application 이름 (**ai-serving 주의**: backend values의 `AI_SERVER_URL`이 `kim-minji-ai-serving-ai-serving...`이라 현재 릴리스명이 `kim-minji-ai-serving`일 가능성이 높다. ApplicationSet은 `ai-serving` 릴리스로 Service `ai-serving-ai-serving`을 만들므로, 이름이 다르면 `AI_SERVER_URL`을 맞추거나 `releaseName`을 지정해야 backend→AI 호출이 된다. `kubectl -n ai-serving get svc`로 확인) | ApplicationSet이 차트명으로 생성 — apps: `mysql`, `minio`, `backend`, `ai-serving`, `frontend` / platform: `sealed-secrets`, `metallb`, `cert-manager`, `longhorn`, `traefik`, `keda`, `argo-rollouts`, `istio`(실험 때만 리소스 있음), `coredns`, `node-local-dns`, `network-policy`, `ingress`, `monitoring`, `loki`, `tempo`, `otel-collector`, `backup`, `argocd-notifications` | `argocd/apps/*.yaml` | `kubectl -n gitops get applications`. 이름이 다르면 4.1 절차에서 non-cascade 삭제. **앱 차트는 이름이 곧 Helm 릴리스명**이라, 다르면 리소스 이름·StatefulSet PVC가 새로 생겨 빈 DB/버킷으로 뜬다 → 해당 원소에 기존 릴리스명을 `releaseName`으로 지정하거나 2장 백업으로 데이터 이전 |
 | C6 | 배포 전 | ArgoCD 버전 | `templatePatch`(v2.10+), `ignoreMissingValueFiles` 사용 | `argocd/apps/platform.yaml` | `argocd version` 또는 argocd-server 이미지 태그 |
 | C7 | 배포 전 | VM 메모리 배분 | 8장 가정: cp1 8GB / w1 7GB / ai2 7GB | UTM 설정 | 8장 표와 `kubectl describe node` Allocatable |
 | C8 | 배포 후 | 레포 밖 구성요소 실제 사용량 | 8장 추정치 | — | `kubectl top pod -A` (ArgoCD, k3s 내장 coredns·metrics-server·local-path, Longhorn instance-manager·CSI) |
@@ -109,6 +111,9 @@ git -C <GitLab kim-minji-infra·helm 클론> rev-parse HEAD   # 반영 전 main 
 | C22 | 배포 후 | backend 메모리 (full, OTel Java agent 포함) | limits 1Gi, `JAVA_OPTS=-XX:MaxRAMPercentage=75` | `kim-minji-helm/backend/values.yaml` `resources` | agent가 힙 밖 메모리를 50~100Mi 더 쓴다. full 배포 후 OOMKilled·GC 시간 확인, 부족하면 limit 상향 |
 | C23 | 배포 전 | cp1·w1 디스크 여유 (Longhorn) | full 복제 2 기준 볼륨 합계 70Gi → 노드당 35Gi + 여유 | Longhorn 노드 디스크 (`/var/lib/longhorn`) | `df -h /var/lib/longhorn`, Longhorn UI의 노드 Schedulable 용량. 부족하면 VM 디스크 확장 또는 PVC 크기(mysql·minio 10Gi) 축소 |
 | C24 | 배포 전 | 현재 CNI 구성 (Calico) | 설치 가이드: k3s 기본 설치 후 Calico v3.26.1 매니페스트 적용 | 레포 밖 (B안 재설치 시) | `kubectl get pods -n kube-system -l k8s-app=calico-node`, `cat /etc/rancher/k3s/config.yaml`(`flannel-backend: none` 여부). NetworkPolicy(항목 3)는 Calico가 집행한다. B안이면 같은 구성으로 재현해야 한다 |
+| C25 | 실험 전 (4.15) | **부하 RATE와 AI Pod 1개 처리량**, 연결 풀·timeout | k6 `RATE=20`, `maxConnections: 32`, `http1MaxPendingRequests: 32`, `timeout: 5s` | k6 `-e RATE`, `kim-minji-helm/ai-serving/values.yaml` `mesh.connectionPool`·`mesh.timeout` | C·D에서는 장애 Pod가 격리된 동안 **정상 Pod 1개가 전부 받는다**(격리 시간이 30→60→90초로 늘어 5분 중 대부분). 그래서 Pod 2개가 아니라 **1개 기준**으로 확인한다: 실험 `mesh` 구성에서 장애 Pod를 켠 채(정상 Pod 1개) RATE를 5부터 올려 `istio_requests_total`의 `response_flags="UO"`(연결 풀 초과)·`UT`(timeout)가 0이고 p95가 3초 아래인 최대 RATE를 찾는다. 본 측정 RATE는 그 70% 이하로 정하고 모든 시나리오에 같은 값을 쓴다 (20 RPS가 넘치면 20을 고집하지 않는다). 단일 워커 FastAPI라 KEDA 기준값(Pod당 2 rps, C21)보다 크게 높지 않을 수 있다 |
+| C26 | 실험 전 (4.15) | ai2 메모리로 AI Pod 2개 + 카나리 1개 | dev limits 1Gi × 3 = 3Gi (+ sidecar 256Mi × 3) | UTM ai2 메모리, `kim-minji-helm/ai-serving/values-dev.yaml` | 실험 라벨을 바꿀 때마다 카나리 Pod가 잠시 1개 더 뜬다. `kubectl top pod -n ai-serving`, OOMKilled 여부. 맥 여유 메모리(약 17GB)로 cp1 8GB + ai2 8GB를 동시에 켤 수 있는지 먼저 확인 |
+| C27 | 실험 전 (4.15) | Istio 1.30과 k3s 버전 호환 | Istio `1.30.7` (base, istiod) | `istio/Chart.yaml` | istio.io의 Supported Releases 표에서 1.30이 지원하는 Kubernetes 버전에 C1 버전이 들어가는지 확인. 아니면 맞는 Istio 버전으로 바꾸고 `helm dependency update istio` |
 
 ## 2. 사전 백업
 
@@ -509,6 +514,114 @@ kubectl argo rollouts retry rollout ai-serving-ai-serving -n ai-serving
 - 목표 기간은 30일이지만 Prometheus 보존 기간(dev 2일 / full 7일) 안에서만 달성률이 계산된다
 - backend 지연 SLO는 새 backend 이미지(SLO 히스토그램 버킷 포함)부터, AI 지연 SLO는 새 ai 이미지(버킷 0.1~10초)부터 값이 나온다
 
+### 4.15 Istio Outlier Detection 실험 (선택, dev cp1+ai2)
+
+**목적**: ai-serving Pod 하나가 `/predict`에서 계속 503을 반환하지만 `/health`(Readiness)는 정상이라 Service 엔드포인트에 남아 있는 상황에서, 무엇이 실패율을 줄이는지 변수를 하나씩 분리해 잰다. Resilience4j Circuit Breaker(`aiServing`)는 서비스 전체 단위라 장애 Pod만 빼지 못한다.
+
+| 시나리오 | `experiment` 라벨 | ai-serving | backend | istio · network-policy |
+|---|---|---|---|---|
+| A baseline | `baseline` | 장애 주입 API 켬, Pod 2개 고정 | CB 무력화 | 없음 |
+| B CB | `cb` | A와 같음 | CB 기본값 (창 10, 실패율 50%, OPEN 30초) | 없음 |
+| C Outlier Detection | `mesh` | + sidecar, DestinationRule(연속 5xx 3회 → 30초 격리, 최대 50%), VirtualService(timeout 5s, **재시도 0**) | CB 무력화 + sidecar | istiod, sidecar → istiod egress |
+| D C + 재시도 | `mesh-retry` | C + 재시도 2회(503·연결 실패만, 다른 Pod로. timeout은 재시도하지 않음) | C와 같음 | C와 같음 |
+
+- 값은 각 차트의 `values-exp-<라벨>.yaml`이다. ApplicationSet이 `values.yaml` → `values-<env>.yaml` → `values-exp-<라벨>.yaml` 순서로 얹는다. 라벨이 없으면 실험 파일은 무시된다
+- 평소(dev·full)에는 istio Application이 비어 있고, 앱 Pod에 sidecar가 없으며, `/admin/fault`는 404다
+- CB 무력화는 `SPRING_APPLICATION_JSON`(창 1000, 최소 호출 1000, 실패율 100%)이다. 환경변수 이름으로 `resilience4j...instances.aiServing...`을 쓰면 키가 소문자 `aiserving`으로 바인딩돼 적용되지 않는다
+- 재시도를 명시적으로 0으로 둔 이유: VirtualService에 retries가 없으면 Istio 기본 재시도(2회, 503 포함)가 적용돼 C의 결과에 재시도 효과가 섞인다
+- DestinationRule은 `splitExternalLocalOriginErrors: true`다. 연속 5xx는 **upstream이 실제로 보낸 5xx**만 세고, sidecar의 timeout·연결 reset은 세지 않는다. 섞이면 과부하로 느려진 정상 Pod가 격리되고(최대 50%라 둘 중 하나만) 트래픽이 전부 장애 Pod로 갈 수 있다
+
+**전제**
+- 0.5장 1~11단계 완료, `env=dev`, **cp1 + ai2를 켠 상태** (C26). AI Pod 2개는 ai2 선호 배치
+- **장애 주입 API가 들어간 ai 이미지**가 배포돼 있다: ai PR 머지 → GitLab 파이프라인 → helm 태그 MR 머지
+- 맥: `k6`, `kubectl-argo-rollouts`(4.13), k3s 전용 KUBECONFIG. **맥 기본 컨텍스트는 EKS라 반드시 별도 파일로 지정한다** (`loadtest/fault.sh`는 EKS 컨텍스트면 실행을 거부한다)
+- 맥에서 `https://api.wafer.local`이 열린다 (C13 방식, 사설 CA 등록 4.6. 등록 전이면 k6에 `-e INSECURE=true`)
+- C25·C27 확인
+
+**1. 시나리오 전환** (A → B → C → D 순서 권장. C·D는 istiod가 한 번만 뜬다)
+```bash
+export KUBECONFIG=~/.kube/k3s-kim-minji.yaml
+kubectl config current-context                     # k3s인지 확인
+kubectl -n gitops label secret in-cluster experiment=baseline --overwrite
+```
+- 라벨을 바꾸면 ApplicationSet이 해당 Application의 valueFiles를 바꾸고 auto-sync한다. ai-serving Pod 템플릿이 바뀌면 **카나리**가 시작된다(4.13). 실험 전환에는 분석이 필요 없으므로 바로 승격한다:
+  ```bash
+  kubectl argo rollouts promote ai-serving-ai-serving -n ai-serving --full
+  kubectl argo rollouts get rollout ai-serving-ai-serving -n ai-serving   # Healthy, Pod 2개
+  ```
+- **mesh 시나리오(C, D) 확인**:
+  ```bash
+  kubectl -n istio-system get pod                                  # istiod Running
+  kubectl -n application get pod -l app.kubernetes.io/name=backend   # READY 2/2 (istio-proxy)
+  kubectl -n ai-serving get pod -l app.kubernetes.io/name=ai-serving # 2개 모두 READY 2/2
+  kubectl -n ai-serving get destinationrule,virtualservice
+  ```
+  istiod가 뜨기 전에 만들어진 Pod는 sidecar 없이(1/1) 떠 있거나, 주입 webhook(`failurePolicy: Fail`) 때문에 생성이 막혀 있을 수 있다 → istiod Ready 후 `kubectl -n application rollout restart deploy/backend-backend`, `kubectl argo rollouts restart ai-serving-ai-serving -n ai-serving`
+- **CB 설정 확인** (A, C, D는 값이 있어야 하고 B는 없어야 한다): `kubectl -n application exec deploy/backend-backend -c backend -- printenv SPRING_APPLICATION_JSON`. backend Pod 템플릿의 `checksum/config`가 ConfigMap 변경을 따라 Pod를 다시 띄우므로, 롤아웃이 끝난 뒤에 확인한다
+- DestinationRule·VirtualService가 없으면: Istio CRD가 늦게 생겨 ai-serving Application의 retry(최대 약 5분)가 끝났을 수 있다 → `argocd app sync ai-serving` 후 다시 확인
+- `loadtest/fault.sh status` → 두 Pod 모두 `{"enabled": false, ...}`
+
+**2. 한 회차 실행** (시나리오마다 3회, 회차마다 같은 절차)
+```bash
+cd kim-minji-infra
+# (1) 이전 회차의 CB 상태·Envoy 격리 횟수(격리할수록 시간이 늘어난다)를 지우기 위해 backend를 재시작한다
+kubectl -n application rollout restart deploy/backend-backend
+kubectl -n application rollout status deploy/backend-backend
+# (2) 워밍업: 장애 없이 200만 나오는지 확인 (실패가 있으면 원인부터 해결)
+k6 run -e RATE=5 -e DURATION=30s -e SCENARIO=warmup loadtest/ai-predict.js
+# (2-1) 오류 시계열 미리 만들기: Prometheus increase()는 측정 중에 처음 생긴 시계열의 첫 값을 세지 않는다.
+#       재시작한 backend의 status=500, 새 AI Pod의 status=5xx 시계열을 측정 전에 만들어 두고 2번 수집될 때까지(1분) 기다린다
+loadtest/fault.sh on && k6 run -e RATE=5 -e DURATION=5s -e SCENARIO=prime loadtest/ai-predict.js; loadtest/fault.sh off
+sleep 60
+# (3) 장애 주입 → 본 측정(20 RPS × 5분) → 장애 해제
+loadtest/fault.sh on                      # 출력의 시각·Pod 이름을 결과표에 적는다
+mkdir -p loadtest/results
+k6 run -e SCENARIO=A -e RATE=20 -e DURATION=5m --summary-export loadtest/results/A-1.json loadtest/ai-predict.js   # RATE는 C25로 정한 값
+loadtest/fault.sh off
+```
+- **결과표의 오류율·p95는 k6 값만 쓴다** (`http_req_failed`, `http_req_duration` p95). Grafana 값은 교차 확인용이다
+- k6가 `dropped_iterations` threshold 실패로 끝나면(요청을 보내지 못하고 버림) 시나리오마다 실제 부하가 달라지므로 그 회차는 버리고 다시 잰다
+- Grafana 대시보드 **Wafer Istio Outlier Detection 실험**에서 시간 범위를 k6 실행 구간으로 맞추고 캡처한다 (요약 stat은 선택한 기간 전체 기준)
+
+**3. 수집할 값**
+```bash
+# 장애 Pod로 간 요청 비율 (k6 구간이 끝난 직후, Prometheus에서. C·D는 아래 access log의 upstream IP별 건수로도 교차 확인)
+sum by (pod, status) (increase(http_requests_total{job="ai-serving-ai-serving",handler="/predict"}[5m]))
+# 격리·해제 이벤트 (C, D): backend sidecar의 outlier 로그(JSON)
+kubectl -n application logs deploy/backend-backend -c istio-proxy --since=10m | grep -E '"action":"(EJECT|UNEJECT)"'
+# 첫 503 시각: 같은 sidecar의 access log에서 장애 Pod IP로 간 첫 503 (Pod IP: kubectl -n ai-serving get pod -o wide)
+kubectl -n application logs deploy/backend-backend -c istio-proxy --since=10m | grep ' 503 ' | grep '<장애 Pod IP>:8000' | head -1
+```
+- **격리까지 걸린 시간** = 첫 EJECT 시각 − 장애 Pod로 간 첫 503 시각. Envoy는 연속 5xx가 3회가 되는 즉시 격리하므로(interval을 기다리지 않음) 20 RPS에서는 1초 미만이 정상이다. `fault.sh on` 시각은 k6 시작 전이라 기준으로 쓰지 않는다
+- 격리 시간은 `baseEjectionTime × 격리 횟수`로 늘어난다(30초 → 60초 → 90초 …). 5분 동안 격리가 몇 번 일어났는지와 그때마다 새는 실패(약 3건, backend Pod 수만큼)를 함께 적으면 C의 오류율을 설명할 수 있다
+
+**4. 결과 해석 시 주의**
+- **Grafana backend p95는 5초에서 잘린다**: backend SLO 히스토그램의 가장 큰 유한 버킷이 5s라 그 이상은 5로 표시된다. timeout이 없는 A·B는 특히 k6 p95를 기준으로 한다
+- **A의 분산이 50:50이 아닐 수 있다**: sidecar가 없으면 kube-proxy가 *연결* 단위로 Pod를 고르고, backend의 RestTemplate은 keep-alive로 연결을 재사용한다. 오류율은 반드시 "장애 Pod로 간 요청 비율"과 함께 적는다. sidecar(C, D)는 요청 단위로 분산한다
+- **p95**: 장애 Pod는 503을 바로 반환하므로 실패 요청 자체는 빠르다. p95가 크게 달라진다면 원인(정상 Pod 과부하, CB OPEN 동안의 즉시 실패, VirtualService timeout)을 같이 기록한다. `fault.sh on <pod> 2`처럼 지연 후 실패를 주면 "느리게 실패하는 Pod" 시나리오도 따로 잴 수 있다
+- **C와 D의 차이는 재시도 효과**다. D만으로 오류율이 0에 가까워지는 것을 Outlier Detection의 효과로 쓰지 않는다
+- timeout(5s)은 mesh 시나리오에만 있다. A·B에서 RestTemplate은 timeout이 없다
+- 연결 풀 초과(`response_flags="UO"`)나 timeout(`UT`)이 보이면 C25 값을 고친 뒤 다시 잰다
+
+**5. 결과 기록표** (회차별로 채우고, 시나리오별 중앙값을 함께 적는다)
+
+| 시나리오 | 회차 | RATE | 장애 Pod | 총 요청 | dropped | 5xx 비율 (k6) | p95 (k6) | 장애 Pod로 간 비율 | 격리 횟수 | 첫 503 → 격리 | 재시도 | 비고 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| A | 1 | | | | 0 | | | | — | — | — | |
+| B | 1 | | | | 0 | | | | — | — | — | CB OPEN 횟수 |
+| C | 1 | | | | 0 | | | | | | 0 | |
+| D | 1 | | | | 0 | | | | | | | |
+
+**6. 실험 종료**
+```bash
+loadtest/fault.sh off                                   # 켜 둔 Pod가 있으면
+kubectl -n gitops label secret in-cluster experiment-   # 라벨 제거 → 원래 dev 구성
+kubectl argo rollouts promote ai-serving-ai-serving -n ai-serving --full
+```
+- istio Application이 비고 prune으로 istiod·Istio CRD가 지워진다. DestinationRule·VirtualService는 ai-serving Application이 먼저 지우거나 CRD와 함께 지워진다
+- 앱 Pod는 sidecar 라벨이 빠진 템플릿으로 다시 뜬다(sidecar 없음). `kubectl get crd | grep istio.io`가 비어 있고 backend·ai-serving Pod가 1/1이면 끝
+- **실험 중 보안 주의**: 장애 주입 API(`/admin/fault`)는 `ai.wafer.local` Ingress로도 닿는다(Service를 거치므로 Pod를 고를 수는 없다). 실험이 끝나면 라벨을 꼭 지운다
+
 ## 5. 채워야 할 시크릿
 
 모든 값은 `kubeseal`로 암호화해 해당 values 파일의 placeholder 자리에 커밋한다. 평문 커밋 금지.
@@ -807,6 +920,20 @@ full (`--nodes 3`):
 | **합계** | | | | | **3335m** | **6.94Gi** |
 | **HPA 최대치 기준** | | | | | **4335m** | **8.94Gi** |
 
+### 8.4 Outlier Detection 실험 중 (4.15, dev cp1+ai2)
+
+`resource-summary.py --nodes 2`로 dev 렌더링 결과에 실험 오버레이(`values-exp-*.yaml`)를 얹어 계산했다. sidecar는 Pod 생성 시 주입돼 렌더링 결과에 없으므로 따로 더했다.
+
+| 구분 | CPU | 메모리 | dev 대비 |
+|---|---|---|---|
+| dev (실험 없음, 2노드 기준 DaemonSet 포함) | 1965m | 3.94Gi | — |
+| `baseline`·`cb` (AI Pod 2개 고정) | 2215m | 4.44Gi | ai-serving +1 (250m · 512Mi) |
+| `mesh`·`mesh-retry` (렌더링 결과) | 2265m | 4.62Gi | + istiod 50m · 192Mi |
+| `mesh`·`mesh-retry` (sidecar 포함) | ~2415m | ~4.81Gi | + sidecar 3개(backend 1, ai-serving 2) × 50m · 64Mi |
+
+- 실험 라벨을 바꿀 때 카나리 Pod가 잠시 1개 더 뜬다 (+250m · 512Mi, mesh면 sidecar 포함 +300m · 576Mi). ai2 limits 합계는 AI Pod 3개 × 1Gi + sidecar 3 × 256Mi ≈ 3.75Gi (C26)
+- istio-init(initContainer)은 Pod 시작 때만 잠깐 돈다
+
 ## 9. 정적 검증 결과 (클러스터 없이, 2026-10-27)
 
 GitHub `develop`(항목 0~9 머지 후)에서 `scripts/validate.sh`를 실행한 결과. 클러스터 접속 검증(`kubectl --dry-run=server` 등)은 범위 밖이라 하지 않았다.
@@ -856,3 +983,20 @@ GitHub `develop`(항목 0~9 머지 후)에서 `scripts/validate.sh`를 실행한
 - 재현: `brew install helm kubeconform yamllint prometheus` 후 각 레포에서 `scripts/validate.sh`
 
 **클러스터에서만 확인 가능한 것**은 1장의 C 항목(특히 C2·C8·C21·C22 '배포 후')과 6장 체크리스트로 남겼다.
+
+### 9.1 Outlier Detection 실험 추가분 (2026-11-02)
+
+`scripts/validate.sh`가 dev를 검사할 때 `values-exp-*.yaml`도 dev 위에 얹어 렌더링한다(`dev+exp-<라벨>`). helm·infra 모두 전체 통과.
+
+| 차트 | dev | dev+exp-baseline / cb | dev+exp-mesh / mesh-retry |
+|---|---|---|---|
+| `ai-serving` | 5 | 5 (장애 주입 env, KEDA 2~2) | 7 (+ DestinationRule, VirtualService — 스키마 유효) |
+| `backend` | 5 | 5 (CB 무력화 env, cb는 변경 없음) | 5 (+ sidecar 라벨) |
+| `istio` | 0 | 0 | 35 (유효 20, CRD 정의 15) |
+| `network-policy` | 16 | 16 | 18 (+ sidecar → istiod egress 2) |
+| `monitoring` | 116 (실험 대시보드 ConfigMap +1, 항상 렌더링) | | |
+
+- ApplicationSet `templatePatch`를 helm 템플릿 엔진으로 렌더링해 istio에만 `RespectIgnoreDifferences`·webhook `ignoreDifferences`가 붙고 다른 SSA 차트는 그대로인 것을 확인했다
+- ai 장애 주입: 모델을 stub으로 바꾼 로컬 FastAPI에서 `FAULT_INJECTION_ENABLED=false`면 `/admin/fault` 404, `true`면 켠 뒤 `/predict` 503·`/health` 200, 끄면 `/predict` 200
+- k6 스크립트: 로컬 mock(요청 절반 503)에 20 RPS × 3초 → 60건, `http_req_failed` 50.00%
+- `loadtest/fault.sh`: KUBECONFIG 미지정 시 종료, EKS 컨텍스트(더미 kubeconfig)면 실행 거부

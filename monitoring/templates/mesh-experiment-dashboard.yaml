@@ -1,0 +1,11 @@
+# Istio Outlier Detection 실험 대시보드 (RUNBOOK 4.15). slo-dashboard.yaml과 같은 방식
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: wafer-mesh-experiment-dashboard
+  namespace: {{ .Release.Namespace }}
+  labels:
+    grafana_dashboard: "1"
+data:
+  wafer-mesh-experiment.json: |-
+{{ .Files.Get "dashboards/mesh-experiment.json" | indent 4 }}

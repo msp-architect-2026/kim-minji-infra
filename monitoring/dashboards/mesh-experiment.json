@@ -1,0 +1,486 @@
+{
+  "uid": "wafer-mesh-experiment",
+  "title": "Wafer Istio Outlier Detection 실험",
+  "tags": [
+    "istio",
+    "experiment",
+    "wafer"
+  ],
+  "description": "RUNBOOK 4.15. 장애 주입(AI Pod 1개 /predict 503) 상태에서 A baseline / B CB / C Outlier Detection / D C+재시도 비교",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "time": {
+    "from": "now-30m",
+    "to": "now"
+  },
+  "refresh": "10s",
+  "templating": {
+    "list": []
+  },
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "panels": [
+    {
+      "type": "row",
+      "title": "요약 (선택한 기간 전체, k6 5분 구간에 맞춰 보기)",
+      "id": 1,
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 1
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "stat",
+      "title": "backend /ai/predict 5xx 비율",
+      "id": 2,
+      "gridPos": {
+        "x": 0,
+        "y": 1,
+        "w": 6,
+        "h": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "A",
+          "expr": "(sum(increase(http_server_requests_seconds_count{job=\"backend-backend\",uri=\"/ai/predict\",status=~\"5..\"}[$__range])) or vector(0)) / sum(increase(http_server_requests_seconds_count{job=\"backend-backend\",uri=\"/ai/predict\"}[$__range]))",
+          "legendFormat": ""
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 2
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "none"
+      }
+    },
+    {
+      "type": "stat",
+      "title": "backend /ai/predict p95",
+      "id": 3,
+      "gridPos": {
+        "x": 6,
+        "y": 1,
+        "w": 6,
+        "h": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le) (increase(http_server_requests_seconds_bucket{job=\"backend-backend\",uri=\"/ai/predict\"}[$__range])))",
+          "legendFormat": ""
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "description": "backend 히스토그램 버킷 기준 근사값. k6 결과(http_req_duration p95)와 함께 기록한다",
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "none"
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Pod 격리 횟수 (backend sidecar 합계)",
+      "id": 4,
+      "gridPos": {
+        "x": 12,
+        "y": 1,
+        "w": 6,
+        "h": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "A",
+          "expr": "sum(increase(envoy_cluster_outlier_detection_ejections_enforced_total{namespace=\"application\",cluster_name=~\"outbound\\\\|8000\\\\|\\\\|ai-serving-ai-serving.ai-serving.svc.cluster.local\"}[$__range])) or vector(0)",
+          "legendFormat": ""
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "description": "mesh 실험(C, D)에서만 값이 있다",
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "none"
+      }
+    },
+    {
+      "type": "stat",
+      "title": "재시도 횟수 (backend sidecar 합계)",
+      "id": 5,
+      "gridPos": {
+        "x": 18,
+        "y": 1,
+        "w": 6,
+        "h": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "A",
+          "expr": "sum(increase(envoy_cluster_upstream_rq_retry{namespace=\"application\",cluster_name=~\"outbound\\\\|8000\\\\|\\\\|ai-serving-ai-serving.ai-serving.svc.cluster.local\"}[$__range])) or vector(0)",
+          "legendFormat": ""
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "description": "실험 D에서만 0보다 커야 한다",
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "none"
+      }
+    },
+    {
+      "type": "row",
+      "title": "요청 분산과 오류",
+      "id": 6,
+      "gridPos": {
+        "x": 0,
+        "y": 5,
+        "w": 24,
+        "h": 1
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "AI Pod별 /predict 요청 (응답 코드별)",
+      "id": 7,
+      "gridPos": {
+        "x": 0,
+        "y": 6,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "A",
+          "expr": "sum by (pod, status) (rate(http_requests_total{job=\"ai-serving-ai-serving\",handler=\"/predict\"}[1m]))",
+          "legendFormat": "{{pod}} {{status}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "description": "장애 Pod로 가는 요청이 격리 후 0 근처로 떨어지는지 본다 (실험 A·B는 계속 절반 가까이 간다)"
+    },
+    {
+      "type": "timeseries",
+      "title": "backend /ai/predict 응답 코드별",
+      "id": 8,
+      "gridPos": {
+        "x": 12,
+        "y": 6,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "A",
+          "expr": "sum by (status) (rate(http_server_requests_seconds_count{job=\"backend-backend\",uri=\"/ai/predict\"}[1m]))",
+          "legendFormat": "{{status}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "backend /ai/predict p95",
+      "id": 9,
+      "gridPos": {
+        "x": 0,
+        "y": 14,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(http_server_requests_seconds_bucket{job=\"backend-backend\",uri=\"/ai/predict\"}[1m])))",
+          "legendFormat": "p95"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "B",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(http_server_requests_seconds_bucket{job=\"backend-backend\",uri=\"/ai/predict\"}[1m])))",
+          "legendFormat": "p50"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "sidecar 기준 ai-serving 응답 코드 (istio_requests_total)",
+      "id": 10,
+      "gridPos": {
+        "x": 12,
+        "y": 14,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "A",
+          "expr": "sum by (response_code, response_flags) (rate(istio_requests_total{reporter=\"source\",destination_service_name=\"ai-serving-ai-serving\"}[1m]))",
+          "legendFormat": "{{response_code}} {{response_flags}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "description": "response_flags: UO(연결 풀 초과), URX(재시도 한도), UH(정상 upstream 없음), UT(timeout)"
+    },
+    {
+      "type": "row",
+      "title": "Outlier Detection (backend sidecar)",
+      "id": 11,
+      "gridPos": {
+        "x": 0,
+        "y": 22,
+        "w": 24,
+        "h": 1
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "활성 격리 수",
+      "id": 12,
+      "gridPos": {
+        "x": 0,
+        "y": 23,
+        "w": 8,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "A",
+          "expr": "sum by (pod) (envoy_cluster_outlier_detection_ejections_active{namespace=\"application\",cluster_name=~\"outbound\\\\|8000\\\\|\\\\|ai-serving-ai-serving.ai-serving.svc.cluster.local\"})",
+          "legendFormat": "{{pod}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "description": "backend Pod(sidecar)마다 따로 격리한다. 1이면 AI Pod 1개가 빠진 상태"
+    },
+    {
+      "type": "timeseries",
+      "title": "정상 / 전체 AI Pod (sidecar가 보는 엔드포인트)",
+      "id": 13,
+      "gridPos": {
+        "x": 8,
+        "y": 23,
+        "w": 8,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "A",
+          "expr": "sum by (pod) (envoy_cluster_membership_healthy{namespace=\"application\",cluster_name=~\"outbound\\\\|8000\\\\|\\\\|ai-serving-ai-serving.ai-serving.svc.cluster.local\"})",
+          "legendFormat": "healthy {{pod}}"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "B",
+          "expr": "sum by (pod) (envoy_cluster_membership_total{namespace=\"application\",cluster_name=~\"outbound\\\\|8000\\\\|\\\\|ai-serving-ai-serving.ai-serving.svc.cluster.local\"})",
+          "legendFormat": "total {{pod}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "격리·재시도·연결 풀 초과 (1분 증가량)",
+      "id": 14,
+      "gridPos": {
+        "x": 16,
+        "y": 23,
+        "w": 8,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "A",
+          "expr": "sum(increase(envoy_cluster_outlier_detection_ejections_enforced_total{namespace=\"application\",cluster_name=~\"outbound\\\\|8000\\\\|\\\\|ai-serving-ai-serving.ai-serving.svc.cluster.local\"}[1m]))",
+          "legendFormat": "격리"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "B",
+          "expr": "sum(increase(envoy_cluster_upstream_rq_retry{namespace=\"application\",cluster_name=~\"outbound\\\\|8000\\\\|\\\\|ai-serving-ai-serving.ai-serving.svc.cluster.local\"}[1m]))",
+          "legendFormat": "재시도"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "C",
+          "expr": "sum(increase(envoy_cluster_upstream_rq_pending_overflow{namespace=\"application\",cluster_name=~\"outbound\\\\|8000\\\\|\\\\|ai-serving-ai-serving.ai-serving.svc.cluster.local\"}[1m]))",
+          "legendFormat": "연결 풀 초과"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      }
+    }
+  ]
+}

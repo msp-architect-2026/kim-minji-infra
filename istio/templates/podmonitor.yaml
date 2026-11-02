@@ -1,0 +1,22 @@
+{{- if .Values.enabled }}
+# sidecar가 주입된 Pod(security.istio.io/tlsMode 라벨)의 Envoy 지표: istio_requests_total, envoy_cluster_outlier_detection_* 등
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: istio-sidecars
+  namespace: monitoring
+  labels:
+    release: monitoring
+spec:
+  namespaceSelector:
+    matchNames:
+      {{- toYaml .Values.podMonitor.namespaces | nindent 6 }}
+  selector:
+    matchExpressions:
+      - key: security.istio.io/tlsMode
+        operator: Exists
+  podMetricsEndpoints:
+    - port: http-envoy-prom
+      path: /stats/prometheus
+      interval: {{ .Values.podMonitor.interval }}
+{{- end }}

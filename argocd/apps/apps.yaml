@@ -49,6 +49,8 @@ spec:
           valueFiles:
             - values.yaml
             - 'values-{{ with .metadata }}{{ with .labels }}{{ with .env }}{{ . }}{{ else }}dev{{ end }}{{ else }}dev{{ end }}{{ else }}dev{{ end }}.yaml'
+            # 실험 오버레이 (RUNBOOK 4.15): 클러스터 experiment 라벨(baseline | cb | mesh | mesh-retry). 라벨이 없거나 파일이 없는 차트는 무시
+            - 'values-exp-{{ with .metadata }}{{ with .labels }}{{ with .experiment }}{{ . }}{{ else }}none{{ end }}{{ else }}none{{ end }}{{ else }}none{{ end }}.yaml'
       destination:
         server: '{{ .server }}'
         namespace: '{{ .namespace }}'

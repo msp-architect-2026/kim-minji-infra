@@ -1,0 +1,14 @@
+{{- if .Values.enabled }}
+# mTLS는 PERMISSIVE: sidecar가 없는 Traefik·Prometheus·kubelet이 평문으로 앱 Pod에 접근할 수 있어야 한다
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    # 같은 sync에서 만드는 Istio CRD가 아직 없을 때 dry-run 실패를 건너뛴다
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  mtls:
+    mode: PERMISSIVE
+{{- end }}
