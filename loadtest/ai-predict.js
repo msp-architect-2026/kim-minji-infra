@@ -19,11 +19,14 @@ export const options = {
       timeUnit: '1s',
       duration: DURATION,
       preAllocatedVUs: 40,
-      maxVUs: 200,
+      // 30초 timeout × 20 RPS를 감당할 만큼. 모자라면 k6가 요청을 보내지 않고 버린다(dropped_iterations)
+      maxVUs: 600,
     },
   },
   tags: { experiment: __ENV.SCENARIO || 'unknown' },
   summaryTrendStats: ['avg', 'p(50)', 'p(95)', 'p(99)', 'max'],
+  // 버려진 요청은 http_req_failed에 잡히지 않아 실패율이 낮게 보인다. 하나라도 있으면 그 회차는 다시 잰다
+  thresholds: { dropped_iterations: ['count==0'] },
 };
 
 export default function () {

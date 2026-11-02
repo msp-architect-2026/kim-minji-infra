@@ -13,9 +13,10 @@ case "$ctx" in
 esac
 
 NS=ai-serving
+# Running 중 종료 대기(deletionTimestamp 있음)인 Pod는 뺀다 (롤아웃 직후 곧 사라질 Pod를 고르지 않게)
 pods() {
   kubectl -n "$NS" get pods -l app.kubernetes.io/name=ai-serving --field-selector=status.phase=Running \
-    -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' | sort
+    -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.metadata.deletionTimestamp}{"\n"}{end}' | awk 'NF == 1' | sort
 }
 # $1: Pod, $2: JSON 본문(비우면 GET)
 call() {
@@ -29,14 +30,17 @@ now() { python3 -c 'import datetime; print(datetime.datetime.now().astimezone().
 
 cmd="${1:-status}"
 case "$cmd" in
+  # 호출 결과는 변수에 받는다 (echo 인자 안의 $(...)는 실패해도 set -e가 멈추지 않는다)
   status)
-    for p in $(pods); do echo "$p $(call "$p" '')"; done ;;
+    for p in $(pods); do out=$(call "$p" ''); echo "$p $out"; done ;;
   on)
     pod="${2:-$(pods | head -1)}"
-    echo "$(now) fault ON  $pod $(call "$pod" "{\"enabled\": true, \"delay_seconds\": ${3:-0}}")" ;;
+    out=$(call "$pod" "{\"enabled\": true, \"delay_seconds\": ${3:-0}}")
+    echo "$(now) fault ON  $pod $out" ;;
   off)
     pod="${2:-$(pods | head -1)}"
-    echo "$(now) fault OFF $pod $(call "$pod" '{"enabled": false}')" ;;
+    out=$(call "$pod" '{"enabled": false}')
+    echo "$(now) fault OFF $pod $out" ;;
   *)
     echo "사용법: $0 status | on [pod] [delay_seconds] | off [pod]" >&2; exit 1 ;;
 esac

@@ -111,7 +111,7 @@ git -C <GitLab kim-minji-infra·helm 클론> rev-parse HEAD   # 반영 전 main 
 | C22 | 배포 후 | backend 메모리 (full, OTel Java agent 포함) | limits 1Gi, `JAVA_OPTS=-XX:MaxRAMPercentage=75` | `kim-minji-helm/backend/values.yaml` `resources` | agent가 힙 밖 메모리를 50~100Mi 더 쓴다. full 배포 후 OOMKilled·GC 시간 확인, 부족하면 limit 상향 |
 | C23 | 배포 전 | cp1·w1 디스크 여유 (Longhorn) | full 복제 2 기준 볼륨 합계 70Gi → 노드당 35Gi + 여유 | Longhorn 노드 디스크 (`/var/lib/longhorn`) | `df -h /var/lib/longhorn`, Longhorn UI의 노드 Schedulable 용량. 부족하면 VM 디스크 확장 또는 PVC 크기(mysql·minio 10Gi) 축소 |
 | C24 | 배포 전 | 현재 CNI 구성 (Calico) | 설치 가이드: k3s 기본 설치 후 Calico v3.26.1 매니페스트 적용 | 레포 밖 (B안 재설치 시) | `kubectl get pods -n kube-system -l k8s-app=calico-node`, `cat /etc/rancher/k3s/config.yaml`(`flannel-backend: none` 여부). NetworkPolicy(항목 3)는 Calico가 집행한다. B안이면 같은 구성으로 재현해야 한다 |
-| C25 | 실험 때 (4.15) | ai-serving 연결 풀·timeout | `maxConnections: 32`, `http1MaxPendingRequests: 32`, `timeout: 5s` (호출 sidecar 하나 기준, ai-serving 전체 합계) | `kim-minji-helm/ai-serving/values.yaml` `mesh.connectionPool`·`mesh.timeout` | 장애 주입 없이 실험 C 구성으로 20 RPS를 돌려 `istio_requests_total`의 `response_flags="UO"`(연결 풀 초과)와 `UT`(timeout)가 0인지 확인. 0이 아니면 값을 올린다 — 이 값 때문에 생긴 503은 Outlier Detection 효과와 섞인다 |
+| C25 | 실험 전 (4.15) | **부하 RATE와 AI Pod 1개 처리량**, 연결 풀·timeout | k6 `RATE=20`, `maxConnections: 32`, `http1MaxPendingRequests: 32`, `timeout: 5s` | k6 `-e RATE`, `kim-minji-helm/ai-serving/values.yaml` `mesh.connectionPool`·`mesh.timeout` | C·D에서는 장애 Pod가 격리된 동안 **정상 Pod 1개가 전부 받는다**(격리 시간이 30→60→90초로 늘어 5분 중 대부분). 그래서 Pod 2개가 아니라 **1개 기준**으로 확인한다: 실험 `mesh` 구성에서 장애 Pod를 켠 채(정상 Pod 1개) RATE를 5부터 올려 `istio_requests_total`의 `response_flags="UO"`(연결 풀 초과)·`UT`(timeout)가 0이고 p95가 3초 아래인 최대 RATE를 찾는다. 본 측정 RATE는 그 70% 이하로 정하고 모든 시나리오에 같은 값을 쓴다 (20 RPS가 넘치면 20을 고집하지 않는다). 단일 워커 FastAPI라 KEDA 기준값(Pod당 2 rps, C21)보다 크게 높지 않을 수 있다 |
 | C26 | 실험 전 (4.15) | ai2 메모리로 AI Pod 2개 + 카나리 1개 | dev limits 1Gi × 3 = 3Gi (+ sidecar 256Mi × 3) | UTM ai2 메모리, `kim-minji-helm/ai-serving/values-dev.yaml` | 실험 라벨을 바꿀 때마다 카나리 Pod가 잠시 1개 더 뜬다. `kubectl top pod -n ai-serving`, OOMKilled 여부. 맥 여유 메모리(약 17GB)로 cp1 8GB + ai2 8GB를 동시에 켤 수 있는지 먼저 확인 |
 | C27 | 실험 전 (4.15) | Istio 1.30과 k3s 버전 호환 | Istio `1.30.7` (base, istiod) | `istio/Chart.yaml` | istio.io의 Supported Releases 표에서 1.30이 지원하는 Kubernetes 버전에 C1 버전이 들어가는지 확인. 아니면 맞는 Istio 버전으로 바꾸고 `helm dependency update istio` |
 
@@ -523,12 +523,13 @@ kubectl argo rollouts retry rollout ai-serving-ai-serving -n ai-serving
 | A baseline | `baseline` | 장애 주입 API 켬, Pod 2개 고정 | CB 무력화 | 없음 |
 | B CB | `cb` | A와 같음 | CB 기본값 (창 10, 실패율 50%, OPEN 30초) | 없음 |
 | C Outlier Detection | `mesh` | + sidecar, DestinationRule(연속 5xx 3회 → 30초 격리, 최대 50%), VirtualService(timeout 5s, **재시도 0**) | CB 무력화 + sidecar | istiod, sidecar → istiod egress |
-| D C + 재시도 | `mesh-retry` | C + 재시도 2회(5xx, 다른 Pod로) | C와 같음 | C와 같음 |
+| D C + 재시도 | `mesh-retry` | C + 재시도 2회(503·연결 실패만, 다른 Pod로. timeout은 재시도하지 않음) | C와 같음 | C와 같음 |
 
 - 값은 각 차트의 `values-exp-<라벨>.yaml`이다. ApplicationSet이 `values.yaml` → `values-<env>.yaml` → `values-exp-<라벨>.yaml` 순서로 얹는다. 라벨이 없으면 실험 파일은 무시된다
 - 평소(dev·full)에는 istio Application이 비어 있고, 앱 Pod에 sidecar가 없으며, `/admin/fault`는 404다
 - CB 무력화는 `SPRING_APPLICATION_JSON`(창 1000, 최소 호출 1000, 실패율 100%)이다. 환경변수 이름으로 `resilience4j...instances.aiServing...`을 쓰면 키가 소문자 `aiserving`으로 바인딩돼 적용되지 않는다
 - 재시도를 명시적으로 0으로 둔 이유: VirtualService에 retries가 없으면 Istio 기본 재시도(2회, 503 포함)가 적용돼 C의 결과에 재시도 효과가 섞인다
+- DestinationRule은 `splitExternalLocalOriginErrors: true`다. 연속 5xx는 **upstream이 실제로 보낸 5xx**만 세고, sidecar의 timeout·연결 reset은 세지 않는다. 섞이면 과부하로 느려진 정상 Pod가 격리되고(최대 50%라 둘 중 하나만) 트래픽이 전부 장애 Pod로 갈 수 있다
 
 **전제**
 - 0.5장 1~11단계 완료, `env=dev`, **cp1 + ai2를 켠 상태** (C26). AI Pod 2개는 ai2 선호 배치
@@ -556,7 +557,8 @@ kubectl -n gitops label secret in-cluster experiment=baseline --overwrite
   kubectl -n ai-serving get destinationrule,virtualservice
   ```
   istiod가 뜨기 전에 만들어진 Pod는 sidecar 없이(1/1) 떠 있거나, 주입 webhook(`failurePolicy: Fail`) 때문에 생성이 막혀 있을 수 있다 → istiod Ready 후 `kubectl -n application rollout restart deploy/backend-backend`, `kubectl argo rollouts restart ai-serving-ai-serving -n ai-serving`
-- **CB 설정 확인** (A, C, D는 값이 있어야 하고 B는 없어야 한다): `kubectl -n application exec deploy/backend-backend -c backend -- printenv SPRING_APPLICATION_JSON`
+- **CB 설정 확인** (A, C, D는 값이 있어야 하고 B는 없어야 한다): `kubectl -n application exec deploy/backend-backend -c backend -- printenv SPRING_APPLICATION_JSON`. backend Pod 템플릿의 `checksum/config`가 ConfigMap 변경을 따라 Pod를 다시 띄우므로, 롤아웃이 끝난 뒤에 확인한다
+- DestinationRule·VirtualService가 없으면: Istio CRD가 늦게 생겨 ai-serving Application의 retry(최대 약 5분)가 끝났을 수 있다 → `argocd app sync ai-serving` 후 다시 확인
 - `loadtest/fault.sh status` → 두 Pod 모두 `{"enabled": false, ...}`
 
 **2. 한 회차 실행** (시나리오마다 3회, 회차마다 같은 절차)
@@ -567,18 +569,23 @@ kubectl -n application rollout restart deploy/backend-backend
 kubectl -n application rollout status deploy/backend-backend
 # (2) 워밍업: 장애 없이 200만 나오는지 확인 (실패가 있으면 원인부터 해결)
 k6 run -e RATE=5 -e DURATION=30s -e SCENARIO=warmup loadtest/ai-predict.js
+# (2-1) 오류 시계열 미리 만들기: Prometheus increase()는 측정 중에 처음 생긴 시계열의 첫 값을 세지 않는다.
+#       재시작한 backend의 status=500, 새 AI Pod의 status=5xx 시계열을 측정 전에 만들어 두고 2번 수집될 때까지(1분) 기다린다
+loadtest/fault.sh on && k6 run -e RATE=5 -e DURATION=5s -e SCENARIO=prime loadtest/ai-predict.js; loadtest/fault.sh off
+sleep 60
 # (3) 장애 주입 → 본 측정(20 RPS × 5분) → 장애 해제
 loadtest/fault.sh on                      # 출력의 시각·Pod 이름을 결과표에 적는다
 mkdir -p loadtest/results
-k6 run -e SCENARIO=A -e RATE=20 -e DURATION=5m --summary-export loadtest/results/A-1.json loadtest/ai-predict.js
+k6 run -e SCENARIO=A -e RATE=20 -e DURATION=5m --summary-export loadtest/results/A-1.json loadtest/ai-predict.js   # RATE는 C25로 정한 값
 loadtest/fault.sh off
 ```
-- k6의 `http_req_failed`(5xx 비율)와 `http_req_duration` p95가 **사용자 기준 결과**다. Grafana 값은 교차 확인용
+- **결과표의 오류율·p95는 k6 값만 쓴다** (`http_req_failed`, `http_req_duration` p95). Grafana 값은 교차 확인용이다
+- k6가 `dropped_iterations` threshold 실패로 끝나면(요청을 보내지 못하고 버림) 시나리오마다 실제 부하가 달라지므로 그 회차는 버리고 다시 잰다
 - Grafana 대시보드 **Wafer Istio Outlier Detection 실험**에서 시간 범위를 k6 실행 구간으로 맞추고 캡처한다 (요약 stat은 선택한 기간 전체 기준)
 
 **3. 수집할 값**
 ```bash
-# 장애 Pod로 간 요청 비율 (k6 구간이 끝난 직후, Prometheus에서)
+# 장애 Pod로 간 요청 비율 (k6 구간이 끝난 직후, Prometheus에서. C·D는 아래 access log의 upstream IP별 건수로도 교차 확인)
 sum by (pod, status) (increase(http_requests_total{job="ai-serving-ai-serving",handler="/predict"}[5m]))
 # 격리·해제 이벤트 (C, D): backend sidecar의 outlier 로그(JSON)
 kubectl -n application logs deploy/backend-backend -c istio-proxy --since=10m | grep -E '"action":"(EJECT|UNEJECT)"'
@@ -589,6 +596,7 @@ kubectl -n application logs deploy/backend-backend -c istio-proxy --since=10m | 
 - 격리 시간은 `baseEjectionTime × 격리 횟수`로 늘어난다(30초 → 60초 → 90초 …). 5분 동안 격리가 몇 번 일어났는지와 그때마다 새는 실패(약 3건, backend Pod 수만큼)를 함께 적으면 C의 오류율을 설명할 수 있다
 
 **4. 결과 해석 시 주의**
+- **Grafana backend p95는 5초에서 잘린다**: backend SLO 히스토그램의 가장 큰 유한 버킷이 5s라 그 이상은 5로 표시된다. timeout이 없는 A·B는 특히 k6 p95를 기준으로 한다
 - **A의 분산이 50:50이 아닐 수 있다**: sidecar가 없으면 kube-proxy가 *연결* 단위로 Pod를 고르고, backend의 RestTemplate은 keep-alive로 연결을 재사용한다. 오류율은 반드시 "장애 Pod로 간 요청 비율"과 함께 적는다. sidecar(C, D)는 요청 단위로 분산한다
 - **p95**: 장애 Pod는 503을 바로 반환하므로 실패 요청 자체는 빠르다. p95가 크게 달라진다면 원인(정상 Pod 과부하, CB OPEN 동안의 즉시 실패, VirtualService timeout)을 같이 기록한다. `fault.sh on <pod> 2`처럼 지연 후 실패를 주면 "느리게 실패하는 Pod" 시나리오도 따로 잴 수 있다
 - **C와 D의 차이는 재시도 효과**다. D만으로 오류율이 0에 가까워지는 것을 Outlier Detection의 효과로 쓰지 않는다
@@ -597,12 +605,12 @@ kubectl -n application logs deploy/backend-backend -c istio-proxy --since=10m | 
 
 **5. 결과 기록표** (회차별로 채우고, 시나리오별 중앙값을 함께 적는다)
 
-| 시나리오 | 회차 | 장애 Pod | 총 요청 | 5xx 비율 (k6) | p95 (k6) | 장애 Pod로 간 비율 | 격리 횟수 | 첫 503 → 격리 | 재시도 | 비고 |
-|---|---|---|---|---|---|---|---|---|---|---|
-| A | 1 | | | | | | — | — | — | |
-| B | 1 | | | | | | — | — | — | CB OPEN 횟수 |
-| C | 1 | | | | | | | | 0 | |
-| D | 1 | | | | | | | | | |
+| 시나리오 | 회차 | RATE | 장애 Pod | 총 요청 | dropped | 5xx 비율 (k6) | p95 (k6) | 장애 Pod로 간 비율 | 격리 횟수 | 첫 503 → 격리 | 재시도 | 비고 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| A | 1 | | | | 0 | | | | — | — | — | |
+| B | 1 | | | | 0 | | | | — | — | — | CB OPEN 횟수 |
+| C | 1 | | | | 0 | | | | | | 0 | |
+| D | 1 | | | | 0 | | | | | | | |
 
 **6. 실험 종료**
 ```bash
