@@ -527,7 +527,7 @@ kubectl argo rollouts retry rollout ai-serving-ai-serving -n ai-serving
 
 - 값은 각 차트의 `values-exp-<라벨>.yaml`이다. ApplicationSet이 `values.yaml` → `values-<env>.yaml` → `values-exp-<라벨>.yaml` 순서로 얹는다. 라벨이 없으면 실험 파일은 무시된다
 - 평소(dev·full)에는 istio Application이 비어 있고, 앱 Pod에 sidecar가 없으며, `/admin/fault`는 404다
-- CB 무력화는 `SPRING_APPLICATION_JSON`(창 1000, 최소 호출 1000, 실패율 100%)이다. 환경변수 이름으로 `resilience4j...instances.aiServing...`을 쓰면 키가 소문자 `aiserving`으로 바인딩돼 적용되지 않는다
+- CB 무력화는 `SPRING_APPLICATION_JSON`의 `ignore-exceptions: [java.lang.Exception]`이다(모든 예외를 판정에서 빼서 열리지 않음). 실패율 기준만 올리는 방식(창 1000·실패율 100%)은 kube-proxy가 keep-alive 연결을 장애 Pod에 몰아준 50초 동안 1000건 연속 실패로 실제로 열렸다(실험 환경에서 확인). 환경변수 이름으로 `resilience4j...instances.aiServing...`을 쓰면 키가 소문자 `aiserving`으로 바인딩돼 적용되지 않는다
 - 재시도를 명시적으로 0으로 둔 이유: VirtualService에 retries가 없으면 Istio 기본 재시도(2회, 503 포함)가 적용돼 C의 결과에 재시도 효과가 섞인다
 - DestinationRule은 `splitExternalLocalOriginErrors: true`다. 연속 5xx는 **upstream이 실제로 보낸 5xx**만 세고, sidecar의 timeout·연결 reset은 세지 않는다. 섞이면 과부하로 느려진 정상 Pod가 격리되고(최대 50%라 둘 중 하나만) 트래픽이 전부 장애 Pod로 갈 수 있다
 
