@@ -1,0 +1,3 @@
+# 실험 C: Istio sidecar → istiod egress 허용 (RUNBOOK 4.15)
+mesh:
+  enabled: true

@@ -1,0 +1,54 @@
+# Istio(sidecar 모드): ai-serving Pod 단위 장애 격리(Outlier Detection) 실험용 (RUNBOOK 4.15).
+# 평소(dev·full)에는 렌더링하지 않는다. 클러스터 experiment 라벨이 mesh·mesh-retry일 때 values-exp-*.yaml이 켠다.
+# sidecar는 sidecar.istio.io/inject=true 라벨이 붙은 Pod(kim-minji-helm backend·ai-serving의 mesh.enabled)에만 들어간다.
+enabled: false
+
+# CRD(base)는 같은 릴리스에 둔다. ArgoCD가 CRD를 먼저 적용한다
+base:
+  defaultRevision: default
+
+istiod:
+  # 기본 requests(500m·2Gi)와 HPA(1~5개)는 VM 환경에 과하다. 앱 Pod 몇 개만 관리하므로 1개로 고정하고 줄인다
+  autoscaleEnabled: false
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: 50m
+      memory: 192Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  meshConfig:
+    # 요청마다 upstream Pod·응답 코드·플래그(UO: 연결 풀 초과, URX: 재시도 한도 등)를 남겨 Loki에서 Pod별 분산을 확인한다
+    accessLogFile: /dev/stdout
+    defaultConfig:
+      # sidecar가 준비된 뒤 앱 컨테이너를 시작한다 (ai-serving은 기동 중 MinIO에서 모델을 받는다)
+      holdApplicationUntilProxyStarts: true
+      # 기본으로는 꺼져 있는 Envoy 지표 중 실험에 필요한 것만 노출한다 (격리 횟수·활성 격리 수, 재시도, 연결 풀 초과, timeout)
+      proxyStatsMatcher:
+        inclusionRegexps:
+          - ".*outlier_detection.*"
+          - ".*upstream_rq_retry.*"
+          - ".*upstream_rq_timeout.*"
+          - ".*upstream_rq_pending_overflow.*"
+          - ".*upstream_cx_overflow.*"
+          - ".*membership_(healthy|total).*"
+  global:
+    proxy:
+      # 격리·해제 이벤트를 sidecar 로그(JSON)에 남긴다. 장애 주입 시각과 비교해 격리까지 걸린 시간을 잰다
+      outlierLogPath: /dev/stdout
+      # sidecar 하나당. 기본값(100m·128Mi / 2 core·1Gi)은 과하다
+      resources:
+        requests:
+          cpu: 50m
+          memory: 64Mi
+        limits:
+          cpu: 500m
+          memory: 256Mi
+
+# Envoy 지표(15090)를 Prometheus가 가져간다. 메시 Pod가 있는 네임스페이스만
+podMonitor:
+  namespaces:
+    - application
+    - ai-serving
+  interval: 15s

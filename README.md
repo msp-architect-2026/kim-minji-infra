@@ -62,6 +62,7 @@ kim-minji-infra/
 ├── traefik/          # Traefik Ingress Controller (ingress-nginx 대체)
 ├── keda/             # KEDA (ai-serving 요청 수 기반 오토스케일링)
 ├── argo-rollouts/    # Argo Rollouts (ai-serving 카나리 배포)
+├── istio/            # Istio base + istiod (Outlier Detection 실험 때만 렌더링, RUNBOOK 4.15)
 ├── ingress/          # 서비스별 Ingress 규칙 (class: traefik)
 ├── monitoring/       # kube-prometheus-stack (Prometheus + Grafana)
 ├── loki/             # Loki + Promtail 로깅 스택
@@ -76,6 +77,7 @@ kim-minji-infra/
 │   ├── bootstrap/    # root App of Apps, in-cluster 클러스터 Secret(env 라벨) — 최초 1회 수동 적용
 │   └── apps/         # ApplicationSet: platform(이 레포 차트), apps(kim-minji-helm 차트)
 ├── scripts/          # validate.sh(정적 검증), resource-summary.py(requests 합계)
+├── loadtest/         # k6 부하 스크립트, ai-serving 장애 주입 토글 (RUNBOOK 4.15)
 └── docs/RUNBOOK.md   # 클러스터 작업 절차
 ```
 
@@ -87,6 +89,8 @@ kim-minji-infra/
 |----------|------|-----------|
 | `dev` (기본) | 노드 1~2대만 켠 개발 환경 | CoreDNS replica 1·ScheduleAnyway, Prometheus 보존 2d·resource 최소, Loki resource 최소, Traefik 1, Longhorn 복제 1·CSI 1 |
 | `full` | 3노드 To-Be | CoreDNS replica 2·DoNotSchedule, Prometheus 보존 7d, Traefik 2·PDB·노드 분산, Longhorn 복제 2·CSI 2 |
+
+실험 오버레이: 클러스터 `experiment` 라벨(`baseline` | `cb` | `mesh` | `mesh-retry`)이 있으면 프로파일 위에 `values-exp-<라벨>.yaml`을 얹는다. Istio Outlier Detection 실험(RUNBOOK 4.15) 전용이며, 라벨이 없으면 무시된다.
 
 - 차트마다 `values.yaml`(공통) + `values-dev.yaml` / `values-full.yaml`(있을 때만)을 겹쳐 씁니다.
 - ApplicationSet은 in-cluster 클러스터 Secret의 `env` 라벨로 프로파일을 고릅니다. Secret이나 라벨이 없으면 `dev`입니다.

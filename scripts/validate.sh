@@ -3,7 +3,7 @@
 #   1) helm lint / helm template (차트 × 프로파일)
 #   2) kubeconform 스키마 검증 (CRD는 datreeio CRDs-catalog)
 #   3) yamllint (values 파일, raw 매니페스트)
-# 사용법: scripts/validate.sh [dev|full ...]   (기본: dev full)
+# 사용법: scripts/validate.sh [dev|full ...]   (기본: dev full. dev를 검사하면 values-exp-*.yaml 실험 오버레이도 dev 위에서 렌더링)
 # 대상 목록: scripts/releases.txt (차트 릴리스 네임스페이스 [skip-schema]), scripts/manifests.txt (raw 매니페스트 파일·디렉터리)
 set -uo pipefail
 
@@ -33,24 +33,38 @@ while read -r chart release namespace opts; do
   fi
   yamllint -d "$YAMLLINT_CONF" "$chart"/values*.yaml || failed+=("$chart: yamllint")
 
+  # 렌더링 단위: 프로파일(dev, full) + dev 위에 얹은 실험 오버레이(values-exp-*.yaml → dev+exp-*).
+  # 실험 오버레이는 ApplicationSet이 클러스터 experiment 라벨로 고른다 (RUNBOOK 4.15)
+  targets=()
   for profile in "${PROFILES[@]}"; do
+    targets+=("$profile")
+    if [ "$profile" = dev ]; then
+      for exp in "$chart"/values-exp-*.yaml; do
+        [ -f "$exp" ] && targets+=("dev+$(basename "$exp" .yaml | sed 's/^values-//')")
+      done
+    fi
+  done
+
+  for target in "${targets[@]}"; do
+    profile="${target%%+*}"
     args=(-f "$chart/values.yaml")
     [ -f "$chart/values-$profile.yaml" ] && args+=(-f "$chart/values-$profile.yaml")
+    [ "$target" != "$profile" ] && args+=(-f "$chart/values-${target#*+}.yaml")
     # ci/test-values.yaml: 검증용 더미 값 (SealedSecret 암호문 자리 등). 배포에는 쓰지 않는다.
     [ -f "$chart/ci/test-values.yaml" ] && args+=(-f "$chart/ci/test-values.yaml")
-    rendered="$OUT/$profile/$release.yaml"
-    mkdir -p "$OUT/$profile"
+    rendered="$OUT/$target/$release.yaml"
+    mkdir -p "$OUT/$target"
 
-    echo "=== [$profile] $chart (release=$release, ns=$namespace)"
-    helm lint "$chart" "${args[@]}" --quiet || failed+=("[$profile] $chart: helm lint")
+    echo "=== [$target] $chart (release=$release, ns=$namespace)"
+    helm lint "$chart" "${args[@]}" --quiet || failed+=("[$target] $chart: helm lint")
     if helm template "$release" "$chart" -n "$namespace" "${args[@]}" > "$rendered"; then
       if [ "${opts:-}" = skip-schema ]; then
         echo "kubeconform 생략 (skip-schema: 부분 매니페스트)"
       else
-        kubeconform_run "$rendered" || failed+=("[$profile] $chart: kubeconform")
+        kubeconform_run "$rendered" || failed+=("[$target] $chart: kubeconform")
       fi
     else
-      failed+=("[$profile] $chart: helm template")
+      failed+=("[$target] $chart: helm template")
     fi
   done
 done < scripts/releases.txt

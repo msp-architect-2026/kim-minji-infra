@@ -19,3 +19,11 @@ backupExternalEgress:
   exceptCIDRs:
     - 10.42.0.0/16
     - 10.43.0.0/16
+
+# Istio sidecar → istiod(설정·인증서 15012) egress. Outlier Detection 실험(experiment=mesh·mesh-retry)에서만 켠다 (RUNBOOK 4.15)
+# 사이드카 inbound는 원래 목적지 포트(8000, 8080)로 들어오므로 기존 ingress 규칙으로 충분하다. Prometheus의 15090 수집도 monitoring 전체 허용 규칙에 포함된다
+mesh:
+  enabled: false
+  namespaces:
+    - application
+    - ai-serving

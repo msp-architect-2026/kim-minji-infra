@@ -17,3 +17,4 @@ ingress         ingress         application
 network-policy  network-policy  default
 backup          backup          storage
 argocd-notifications argocd-notifications gitops
+istio           istio           istio-system
