@@ -16,7 +16,7 @@ NS=ai-serving
 # Running 중 종료 대기(deletionTimestamp 있음)인 Pod는 뺀다 (롤아웃 직후 곧 사라질 Pod를 고르지 않게)
 pods() {
   kubectl -n "$NS" get pods -l app.kubernetes.io/name=ai-serving --field-selector=status.phase=Running \
-    -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.metadata.deletionTimestamp}{"\n"}{end}' | awk 'NF == 1' | sort
+    -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.metadata.deletionTimestamp}{"\n"}{end}' | awk 'NF == 1 {print $1}' | sort
 }
 # $1: Pod, $2: JSON 본문(비우면 GET)
 call() {
