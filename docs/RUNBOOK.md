@@ -529,7 +529,7 @@ kubectl argo rollouts retry rollout ai-serving-ai-serving -n ai-serving
 - 평소(dev·full)에는 istio Application이 비어 있고, 앱 Pod에 sidecar가 없으며, `/admin/fault`는 404다
 - CB 무력화는 `SPRING_APPLICATION_JSON`의 `ignore-exceptions: [java.lang.Exception]`이다(모든 예외를 판정에서 빼서 열리지 않음). 실패율 기준만 올리는 방식(창 1000·실패율 100%)은 kube-proxy가 keep-alive 연결을 장애 Pod에 몰아준 50초 동안 1000건 연속 실패로 실제로 열렸다(실험 환경에서 확인). 환경변수 이름으로 `resilience4j...instances.aiServing...`을 쓰면 키가 소문자 `aiserving`으로 바인딩돼 적용되지 않는다
 - 재시도를 명시적으로 0으로 둔 이유: VirtualService에 retries가 없으면 Istio 기본 재시도(2회, 503 포함)가 적용돼 C의 결과에 재시도 효과가 섞인다
-- DestinationRule은 `splitExternalLocalOriginErrors: true`다. 연속 5xx는 **upstream이 실제로 보낸 5xx**만 세고, sidecar의 timeout·연결 reset은 세지 않는다. 섞이면 과부하로 느려진 정상 Pod가 격리되고(최대 50%라 둘 중 하나만) 트래픽이 전부 장애 Pod로 갈 수 있다
+- DestinationRule은 `splitExternalLocalOriginErrors: false`다. sidecar의 timeout(504 UT)·연결 reset도 연속 5xx로 센다. 처음에는 true(upstream이 보낸 5xx만 셈)였으나, 지연 장애 실험(아래 5-2)에서 장애 Pod에 요청이 쌓여 timeout만 나는 동안 다시 격리되지 않는 경우가 나와 바꿨다. 대신 과부하로 느려진 정상 Pod도 격리될 수 있다(최대 50%라 둘 중 하나까지만)
 
 **전제**
 - 0.5장 1~11단계 완료, `env=dev`, **cp1 + ai2를 켠 상태** (C26). AI Pod 2개는 ai2 선호 배치
@@ -643,7 +643,50 @@ kubectl -n application logs deploy/backend-backend -c istio-proxy --since=10m | 
 - **B**: 장애 Pod로 간 요청은 3% 미만인데 오류율이 최대 69%다. 실패의 대부분은 CB OPEN 동안의 거절이다. CB는 AI 서비스 전체를 한 단위로 보므로 OPEN되면 정상 Pod로 갈 요청까지 30초 동안 막는다. keep-alive 연결이 어느 Pod에 붙느냐에 따라 CB가 열리는지가 달라져 회차 편차가 크다
 - **C**: 첫 503 뒤 251~253ms(연속 3번째 5xx)에 격리된다. 격리 시간은 60→90→… 초로 늘고(prime 단계에서 이미 1회 격리돼 측정 구간은 2회차부터 시작), 다시 들어올 때마다 5xx 몇 건이 새어 0.6~0.75%가 남는다
 - **D**: 새는 503(41건)을 재시도가 정상 Pod로 보내 클라이언트 실패가 0이 된다. 이는 재시도 효과이고 Outlier Detection만의 효과가 아니다. D에서는 재시도로 첫 503이 access log에 남지 않아 `fault.sh on` 시각 기준으로 적었다
-- **p95**: 장애가 즉시 503이라 모든 시나리오에서 p95가 수십 ms다. "느리게 실패하는 Pod"에 대한 p95 개선은 이번 측정으로 말할 수 없고, `fault.sh on <pod> 2`로 따로 재야 한다
+- **p95**: 장애가 즉시 503이라 모든 시나리오에서 p95가 수십 ms다. "느리게 실패하는 Pod"에 대한 p95는 아래 5-2에서 쟀다
+
+**5-2. 지연 장애 결과 (2초 후 503)** (2026-11-03, 같은 kind 환경)
+
+`fault.sh on "" 2`로 장애 Pod가 2초를 끈 뒤 503을 반환한다. 위 A~D(당시 설정 `splitExternalLocalOriginErrors: true`)에 두 시나리오를 더했다. 둘 다 `mesh` 오버레이에 ai-serving 값만 하나 더 얹었다.
+- **E**: sidecar·연결 풀·timeout은 C와 같고 Outlier Detection만 끔(`consecutive5xxErrors: 0`, `consecutiveGatewayErrors: 0`) — p95 비교의 "개선 전"
+- **F**: C에서 `splitExternalLocalOriginErrors: false` (timeout도 연속 5xx로 셈) — 현재 기본값
+
+| 시나리오 | 회차 | RATE | 장애 Pod | 총 요청 | dropped | 5xx 비율 (k6) | p95 (k6) | 장애 Pod로 간 비율 | 격리 횟수 | 첫 503 요청 → 격리 | 재시도 | 비고 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| A | 1 | 20 | kfkzz | 6000 | 0 | 1.8% | 53ms | 1.8% | — | — | — |  |
+| A | 2 | 20 | kfkzz | 6000 | 0 | 2.27% | 64ms | 2.3% | — | — | — |  |
+| A | 3 | 20 | kfkzz | 6001 | 0 | 2.4% | 83ms | 2.4% | — | — | — |  |
+| B | 1 | 20 | kfkzz | 6000 | 0 | 2.88% | 118ms | 2.2% | — | — | — | CB OPEN 0 |
+| B | 2 | 20 | kfkzz | 6001 | 0 | 2.3% | 67ms | 2.3% | — | — | — | CB OPEN 0 |
+| B | 3 | 20 | kfkzz | 6001 | 0 | 1.68% | 48ms | 1.7% | — | — | — | CB OPEN 0 |
+| E | 1 | 20 | fzttc | 6000 | 0 | 24.93% | 2010ms | 24.9% | 0 | — | 0 |  |
+| E | 2 | 20 | fzttc | 6001 | 0 | 24.35% | 2010ms | 24.3% | 0 | — | 0 |  |
+| E | 3 | 20 | fzttc | 6001 | 0 | 25.7% | 2009ms | 25.7% | 0 | — | 0 |  |
+| C | 1 | 20 | fzttc | 5991 | 10 | 23.44% | 5008ms | 23.1% | 1 | 2490ms | 0 | timeout(504 UT) 1360, 연결 풀 초과 28 |
+| C | 2 | 20 | fzttc | 6000 | 0 | 0.95% | 39ms | 0.9% | 4 | 2752ms | 0 |  |
+| C | 3 | 20 | fzttc | 5977 | 24 | 0.75% | 1957ms | 0.8% | 4 | 2199ms | 0 |  |
+| D | 1 | 20 | fzttc | 5975 | 26 | 24.47% | 5009ms | 24.2% | 1 | — | 17 | timeout(504 UT) 1427, 연결 풀 초과 35 |
+| D | 2 | 20 | fzttc | 6000 | 0 | 0% | 99ms | 1.0% | 4 | — | 60 |  |
+| D | 3 | 20 | fzttc | 6001 | 0 | 0% | 59ms | 0.9% | 4 | — | 52 |  |
+| F | 1 | 20 | fzttc | 6001 | 0 | 0.8% | 44ms | 0.8% | 4 | 2643ms | 0 |  |
+| F | 2 | 20 | fzttc | 6001 | 0 | 0.82% | 66ms | 0.8% | 4 | 2248ms | 0 |  |
+| F | 3 | 20 | fzttc | 6001 | 0 | 0.62% | 70ms | 0.6% | 4 | 2300ms | 0 |  |
+
+| 시나리오 | 5xx 비율 | p95 | 장애 Pod로 간 비율 |
+|---|---|---|---|
+| A 기준선 (sidecar 없음) | 1.8~2.4% | 53~83ms | 1.8~2.4% |
+| B Spring CB | 1.7~2.9% | 48~118ms | 1.7~2.3% |
+| **E mesh, Outlier Detection 끔** | **24.3~25.7%** | **2009~2010ms** | 24~26% |
+| C Outlier Detection (split true) | 0.75 / 0.95 / 23.4% | 39 / 1957 / 5008ms | 0.8~23% |
+| D C + 재시도 2 | 0 / 0 / 24.5% | 59 / 99 / 5009ms | 0.9~24% |
+| **F Outlier Detection (split false)** | **0.62~0.82%** | **44~70ms** | 0.6~0.8% |
+
+해석:
+- **p95 개선은 E → F로 본다**: 같은 sidecar·요청 단위 분산에서 Outlier Detection만 켜면 p95 2010ms → 44~70ms, 5xx 약 25% → 0.6~0.8%
+- **A·B는 "개선 전"으로 쓰지 않는다**: sidecar가 없으면 backend가 keep-alive 연결을 재사용하는데, 느린 Pod에 붙은 연결은 오래 잡혀 있어 그 Pod로 가는 요청이 2% 안팎으로 저절로 줄어든다(즉시 503일 때 65~88%로 몰린 것과 반대). CB도 열리지 않았다
+- **C·D의 1회차 실패**: 첫 격리가 풀린 뒤 장애 Pod에 요청이 쌓여 응답이 5초를 넘었고, sidecar timeout(504 UT)만 나서 연속 5xx가 3이 되지 않아 끝까지 다시 격리되지 않았다(격리 1회). split true의 약점이고, F는 3회 모두 격리 4회·timeout 0이었다
+- C-3의 p95 1957ms는 dropped 24와 함께 나온 값이라 맥 부하 잡음일 수 있다
+- 첫 503 요청 → 격리가 2.2~2.75초인 것은 access log 시각이 요청 시작 시각이고 503 응답이 2초 뒤에 오기 때문이다(응답 기준으로는 수백 ms)
 
 **6. 실험 종료**
 ```bash
