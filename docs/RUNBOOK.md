@@ -111,7 +111,7 @@ git -C <GitLab kim-minji-infra·helm 클론> rev-parse HEAD   # 반영 전 main 
 | C22 | 배포 후 | backend 메모리 (full, OTel Java agent 포함) | limits 1Gi, `JAVA_OPTS=-XX:MaxRAMPercentage=75` | `kim-minji-helm/backend/values.yaml` `resources` | agent가 힙 밖 메모리를 50~100Mi 더 쓴다. full 배포 후 OOMKilled·GC 시간 확인, 부족하면 limit 상향 |
 | C23 | 배포 전 | cp1·w1 디스크 여유 (Longhorn) | full 복제 2 기준 볼륨 합계 70Gi → 노드당 35Gi + 여유 | Longhorn 노드 디스크 (`/var/lib/longhorn`) | `df -h /var/lib/longhorn`, Longhorn UI의 노드 Schedulable 용량. 부족하면 VM 디스크 확장 또는 PVC 크기(mysql·minio 10Gi) 축소 |
 | C24 | 배포 전 | 현재 CNI 구성 (Calico) | 설치 가이드: k3s 기본 설치 후 Calico v3.26.1 매니페스트 적용 | 레포 밖 (B안 재설치 시) | `kubectl get pods -n kube-system -l k8s-app=calico-node`, `cat /etc/rancher/k3s/config.yaml`(`flannel-backend: none` 여부). NetworkPolicy(항목 3)는 Calico가 집행한다. B안이면 같은 구성으로 재현해야 한다 |
-| C25 | 실험 전 (4.15) | **부하 RATE와 AI Pod 1개 처리량**, 연결 풀·timeout | k6 `RATE=20`, `maxConnections: 32`, `http1MaxPendingRequests: 32`, `timeout: 5s` | k6 `-e RATE`, `kim-minji-helm/ai-serving/values.yaml` `mesh.connectionPool`·`mesh.timeout` | C·D에서는 장애 Pod가 격리된 동안 **정상 Pod 1개가 전부 받는다**(격리 시간이 30→60→90초로 늘어 5분 중 대부분). 그래서 Pod 2개가 아니라 **1개 기준**으로 확인한다: 실험 `mesh` 구성에서 장애 Pod를 켠 채(정상 Pod 1개) RATE를 5부터 올려 `istio_requests_total`의 `response_flags="UO"`(연결 풀 초과)·`UT`(timeout)가 0이고 p95가 3초 아래인 최대 RATE를 찾는다. 본 측정 RATE는 그 70% 이하로 정하고 모든 시나리오에 같은 값을 쓴다 (20 RPS가 넘치면 20을 고집하지 않는다). 단일 워커 FastAPI라 KEDA 기준값(Pod당 2 rps, C21)보다 크게 높지 않을 수 있다 |
+| C25 | 실험 전 (4.15) | **부하 RATE와 AI Pod 1개 처리량**, 연결 풀·timeout | k6 `RATE=20`, `maxConnections: 100`(RATE × timeout, 5-3), `http1MaxPendingRequests: 32`, `timeout: 5s` | k6 `-e RATE`, `kim-minji-helm/ai-serving/values.yaml` `mesh.connectionPool`·`mesh.timeout` | C·D에서는 장애 Pod가 격리된 동안 **정상 Pod 1개가 전부 받는다**(격리 시간이 30→60→90초로 늘어 5분 중 대부분). 그래서 Pod 2개가 아니라 **1개 기준**으로 확인한다: 실험 `mesh` 구성에서 장애 Pod를 켠 채(정상 Pod 1개) RATE를 5부터 올려 `istio_requests_total`의 `response_flags="UO"`(연결 풀 초과)·`UT`(timeout)가 0이고 p95가 3초 아래인 최대 RATE를 찾는다. 본 측정 RATE는 그 70% 이하로 정하고 모든 시나리오에 같은 값을 쓴다 (20 RPS가 넘치면 20을 고집하지 않는다). 단일 워커 FastAPI라 KEDA 기준값(Pod당 2 rps, C21)보다 크게 높지 않을 수 있다 |
 | C26 | 실험 전 (4.15) | ai2 메모리로 AI Pod 2개 + 카나리 1개 | dev limits 1Gi × 3 = 3Gi (+ sidecar 256Mi × 3) | UTM ai2 메모리, `kim-minji-helm/ai-serving/values-dev.yaml` | 실험 라벨을 바꿀 때마다 카나리 Pod가 잠시 1개 더 뜬다. `kubectl top pod -n ai-serving`, OOMKilled 여부. 맥 여유 메모리(약 17GB)로 cp1 8GB + ai2 8GB를 동시에 켤 수 있는지 먼저 확인 |
 | C27 | 실험 전 (4.15) | Istio 1.30과 k3s 버전 호환 | Istio `1.30.7` (base, istiod) | `istio/Chart.yaml` | istio.io의 Supported Releases 표에서 1.30이 지원하는 Kubernetes 버전에 C1 버전이 들어가는지 확인. 아니면 맞는 Istio 버전으로 바꾸고 `helm dependency update istio` |
 
@@ -689,7 +689,26 @@ kubectl -n application logs deploy/backend-backend -c istio-proxy --since=10m | 
   - 호출 sidecar 수신 → 장애 Pod 도착까지 **중앙값 4,853ms**(최소 3,551ms), Pod 안 체류는 중앙값 147ms였고 inbound 응답 코드는 `0 DC`(호출 쪽이 끊음)
   - 같은 구간 `upstream_cx_overflow` 1748, `upstream_rq_pending_overflow` 23 → 연결 풀 상한(`maxConnections: 32`)에 걸려 요청이 **호출 sidecar 안에서 대기**했다. 장애 Pod 자체는 느려지지 않았다(동시 처리 최대 9)
   - 요청이 Pod에 닿자마자 5초가 끝나 끊기므로 Pod의 503(2초 뒤)이 돌아오지 않고, 남는 오류는 local-origin인 504뿐이다. split true에서는 이것이 연속 5xx에 들어가지 않아 격리가 다시 걸리지 않는 상태가 계속된다
-  - 대안: split false(현재), 연결 풀 상한을 장애 Pod가 2초 붙잡는 연결 수(RATE × 지연)보다 넉넉히, 또는 perTryTimeout을 지연보다 짧게
+  - 대안: split false, 연결 풀 상한 확대, 또는 perTryTimeout을 지연보다 짧게 → 아래 5-3에서 앞의 둘을 확인해 둘 다 적용했다
+
+**5-3. 연결 풀 상한 검증 (2초 지연 후 503)** (2026-11-04, 같은 kind 환경, Prometheus·Grafana 함께 실행)
+
+`maxConnections`를 32에서 **RATE × timeout = 20 × 5s = 100**으로 올렸다. 응답을 끄는 Pod가 연결을 timeout까지 붙잡아도 sidecar 안에서 대기가 생기지 않는 크기다.
+
+| 시나리오 | 회차 | 5xx 비율 (k6) | p95 (k6) | dropped | 격리 횟수 | 504 UT | 연결 풀 초과 (cx) | 대기열 초과 |
+|---|---|---|---|---|---|---|---|---|
+| C (split true, 연결 32) | 7 | 10.27% | 5007ms | 2 | 3 | 562 | 1748 | 23 |
+| G (split true, 연결 100) | 1 | 0.72% | 3701ms | 49 | 4 | 0 | 0 | 0 |
+| G | 2 | 1.43% | 3563ms | 46 | 4 | 0 | 62 | 0 |
+| G | 3 | 0.9% | 1147ms | 9 | 4 | 0 | 0 | 0 |
+| **H (split false, 연결 100)** | 1 | 0.73% | 57ms | 0 | 4 | 0 | 0 | 0 |
+| H | 2 | 0.65% | 41ms | 0 | 4 | 0 | 0 | 0 |
+| H | 3 | 0.92% | 175ms | 0 | 4 | 0 | 0 | 0 |
+
+- **연결 풀이 원인임을 확인**: 격리 설정은 그대로(split true) 두고 연결 상한만 올린 G는 3회 모두 504가 0이고 격리가 매번 다시 걸렸다(4회)
+- G의 p95가 높은 것은 연결 풀과 무관하다. 느린 응답 2,163건(G-1)이 모두 **정상 Pod의 200**이었고, 장애 Pod가 격리된 동안 정상 Pod 하나가 20 RPS를 받으며 포화된 구간에 몰려 있다. 이번에는 Prometheus·Grafana가 같은 맥에서 돌아 정상 Pod 여유가 더 작다(C25: Pod 1개 한계 약 25 RPS, sidecar·모니터링 제외 기준)
+- **현재 기본값 = H**: split false + 연결 100. 3회 실패 0.65~0.92%, p95 41~175ms, timeout·연결 풀 초과 0
+- 운영 RATE가 바뀌면 `maxConnections`도 RATE × timeout으로 다시 잡는다. 너무 크면 정상 Pod 하나에 동시 요청이 몰려 Pod 안에서 대기가 생기므로, 정상 Pod 1개 처리량(C25)과 함께 본다
 - C-3의 p95 1957ms는 dropped 24와 함께 나온 값이라 맥 부하 잡음일 수 있다
 - 첫 503 요청 → 격리가 2.2~2.75초인 것은 access log 시각이 요청 시작 시각이고 503 응답이 2초 뒤에 오기 때문이다(응답 기준으로는 수백 ms)
 
