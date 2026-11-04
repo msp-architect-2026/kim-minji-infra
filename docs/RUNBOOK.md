@@ -529,7 +529,7 @@ kubectl argo rollouts retry rollout ai-serving-ai-serving -n ai-serving
 - 평소(dev·full)에는 istio Application이 비어 있고, 앱 Pod에 sidecar가 없으며, `/admin/fault`는 404다
 - CB 무력화는 `SPRING_APPLICATION_JSON`의 `ignore-exceptions: [java.lang.Exception]`이다(모든 예외를 판정에서 빼서 열리지 않음). 실패율 기준만 올리는 방식(창 1000·실패율 100%)은 kube-proxy가 keep-alive 연결을 장애 Pod에 몰아준 50초 동안 1000건 연속 실패로 실제로 열렸다(실험 환경에서 확인). 환경변수 이름으로 `resilience4j...instances.aiServing...`을 쓰면 키가 소문자 `aiserving`으로 바인딩돼 적용되지 않는다
 - 재시도를 명시적으로 0으로 둔 이유: VirtualService에 retries가 없으면 Istio 기본 재시도(2회, 503 포함)가 적용돼 C의 결과에 재시도 효과가 섞인다
-- DestinationRule은 `splitExternalLocalOriginErrors: false`다. sidecar의 timeout(504 UT)·연결 reset도 연속 5xx로 센다. 처음에는 true(upstream이 보낸 5xx만 셈)였으나, 지연 장애 실험(아래 5-2)에서 장애 Pod에 요청이 쌓여 timeout만 나는 동안 다시 격리되지 않는 경우가 나와 바꿨다. 대신 과부하로 느려진 정상 Pod도 격리될 수 있다(최대 50%라 둘 중 하나까지만)
+- DestinationRule은 `splitExternalLocalOriginErrors: false`다. sidecar의 timeout(504 UT)·연결 reset도 연속 5xx로 센다. 처음에는 true(upstream이 보낸 5xx만 셈)였으나, 지연 장애 실험(아래 5-2)에서 장애 Pod로 가는 요청이 연결 풀 상한에 막혀 호출 sidecar에서 대기하다 timeout으로 끊기는 동안 다시 격리되지 않는 경우가 나와 바꿨다. 대신 과부하로 느려진 정상 Pod도 격리될 수 있다(최대 50%라 둘 중 하나까지만)
 
 **전제**
 - 0.5장 1~11단계 완료, `env=dev`, **cp1 + ai2를 켠 상태** (C26). AI Pod 2개는 ai2 선호 배치
@@ -684,7 +684,12 @@ kubectl -n application logs deploy/backend-backend -c istio-proxy --since=10m | 
 해석:
 - **p95 개선은 E → F로 본다**: 같은 sidecar·요청 단위 분산에서 Outlier Detection만 켜면 p95 2010ms → 44~70ms, 5xx 약 25% → 0.6~0.8%
 - **A·B는 "개선 전"으로 쓰지 않는다**: sidecar가 없으면 backend가 keep-alive 연결을 재사용하는데, 느린 Pod에 붙은 연결은 오래 잡혀 있어 그 Pod로 가는 요청이 2% 안팎으로 저절로 줄어든다(즉시 503일 때 65~88%로 몰린 것과 반대). CB도 열리지 않았다
-- **C·D의 1회차 실패**: 첫 격리가 풀린 뒤 장애 Pod에 요청이 쌓여 응답이 5초를 넘었고, sidecar timeout(504 UT)만 나서 연속 5xx가 3이 되지 않아 끝까지 다시 격리되지 않았다(격리 1회). split true의 약점이고, F는 3회 모두 격리 4회·timeout 0이었다
+- **C·D의 1회차 실패**: 첫 격리가 풀린 뒤 sidecar timeout(504 UT)만 나서 연속 5xx가 3이 되지 않아 끝까지 다시 격리되지 않았다(격리 1회). split true의 약점이고, F는 3회 모두 격리 4회·timeout 0이었다
+- **504가 난 위치 (2026-11-04 split true로 다시 확인, `C-d2-7`)**: 마지막 격리 해제(UNEJECT) 뒤 장애 Pod로 간 564건 중 562건이 504 UT. x-request-id로 backend sidecar(outbound)와 장애 Pod sidecar(inbound) 로그를 맞춰 보면
+  - 호출 sidecar 수신 → 장애 Pod 도착까지 **중앙값 4,853ms**(최소 3,551ms), Pod 안 체류는 중앙값 147ms였고 inbound 응답 코드는 `0 DC`(호출 쪽이 끊음)
+  - 같은 구간 `upstream_cx_overflow` 1748, `upstream_rq_pending_overflow` 23 → 연결 풀 상한(`maxConnections: 32`)에 걸려 요청이 **호출 sidecar 안에서 대기**했다. 장애 Pod 자체는 느려지지 않았다(동시 처리 최대 9)
+  - 요청이 Pod에 닿자마자 5초가 끝나 끊기므로 Pod의 503(2초 뒤)이 돌아오지 않고, 남는 오류는 local-origin인 504뿐이다. split true에서는 이것이 연속 5xx에 들어가지 않아 격리가 다시 걸리지 않는 상태가 계속된다
+  - 대안: split false(현재), 연결 풀 상한을 장애 Pod가 2초 붙잡는 연결 수(RATE × 지연)보다 넉넉히, 또는 perTryTimeout을 지연보다 짧게
 - C-3의 p95 1957ms는 dropped 24와 함께 나온 값이라 맥 부하 잡음일 수 있다
 - 첫 503 요청 → 격리가 2.2~2.75초인 것은 access log 시각이 요청 시작 시각이고 503 응답이 2초 뒤에 오기 때문이다(응답 기준으로는 수백 ms)
 
