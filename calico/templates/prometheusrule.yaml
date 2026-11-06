@@ -1,0 +1,57 @@
+{{- if .Values.metrics.enabled }}
+{{- $m := .Values.metrics }}
+# Calico 알림. 노드 다운·타깃 수집 실패는 kube-prometheus-stack 기본 규칙(KubeNodeNotReady, TargetDown)을 쓴다.
+# calico-node 미준비는 "노드는 Ready인데 calico-node만 안 뜬" 경우만 본다 (dev에서 w1·ai2를 꺼 둔 상태로는 울리지 않게)
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: calico-rules
+  namespace: {{ $m.monitoringNamespace }}
+  labels:
+    release: {{ $m.prometheusRelease }}
+  annotations:
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  groups:
+    - name: calico
+      rules:
+        - alert: CalicoNodeNotReady
+          expr: |
+            max by (node) (
+              kube_pod_info{namespace="{{ $m.calicoNamespace }}", pod=~"calico-node-.*"}
+              * on (namespace, pod) group_left ()
+              (kube_pod_status_ready{namespace="{{ $m.calicoNamespace }}", condition="false"} == 1)
+            )
+            and on (node) (kube_node_status_condition{condition="Ready", status="true"} == 1)
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "{{`{{ $labels.node }}`}} calico-node 미준비"
+            description: "노드는 Ready인데 calico-node가 5분 이상 준비되지 않았다. 이 노드의 Pod 네트워크·NetworkPolicy가 동작하지 않을 수 있다 (장애-대응-절차서 CNI 항목)"
+        - alert: CalicoIptablesRestoreErrors
+          expr: increase(felix_iptables_restore_errors[10m]) > 0
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{`{{ $labels.node }}`}} Felix iptables 규칙 적용 실패"
+            description: "iptables-restore 오류가 10분간 {{`{{ $value }}`}}회. iptables 백엔드(legacy/nft) 불일치 가능성 (장애 #191)"
+        - alert: CalicoFelixNotInSync
+          # felix_resync_state: 1 대기, 2 동기화 중, 3 완료
+          expr: felix_resync_state != 3
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{`{{ $labels.node }}`}} Felix 데이터스토어 미동기화"
+            description: "Felix가 10분 이상 데이터스토어와 동기화되지 않았다. 새 Pod·정책이 이 노드에 반영되지 않는다 (Typha·API 서버 연결 확인)"
+        - alert: CalicoIPPoolUsageHigh
+          expr: |
+            sum by (ippool) (ipam_allocations_in_use) / max by (ippool) (ipam_ippool_size) > {{ $m.alerts.ipamUsageRatio }}
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "IP 풀 {{`{{ $labels.ippool }}`}} 사용률 높음"
+            description: "Pod IP 사용률 {{`{{ $value | humanizePercentage }}`}}"
+{{- end }}

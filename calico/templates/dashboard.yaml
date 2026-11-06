@@ -1,0 +1,13 @@
+{{- if .Values.metrics.enabled }}
+# Grafana Calico 대시보드. kube-prometheus-stack의 Grafana sidecar가 grafana_dashboard=1 라벨 ConfigMap을 불러온다
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: calico-dashboard
+  namespace: {{ .Values.metrics.monitoringNamespace }}
+  labels:
+    grafana_dashboard: "1"
+data:
+  calico.json: |-
+{{ .Files.Get "dashboards/calico.json" | indent 4 }}
+{{- end }}

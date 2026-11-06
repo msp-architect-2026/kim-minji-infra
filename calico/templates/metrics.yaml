@@ -1,0 +1,67 @@
+{{- if .Values.metrics.enabled }}
+{{- $m := .Values.metrics }}
+# Felix(calico-node, hostNetwork)·kube-controllers 메트릭 Service. operator가 calico-system 네임스페이스를 만든 뒤에 생성된다
+# (첫 sync에서 네임스페이스가 없으면 실패 → ApplicationSet retry로 수렴)
+apiVersion: v1
+kind: Service
+metadata:
+  name: calico-felix-metrics
+  namespace: {{ $m.calicoNamespace }}
+  labels:
+    app.kubernetes.io/name: calico-felix-metrics
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  clusterIP: None
+  selector:
+    k8s-app: calico-node
+  ports:
+    - name: http-metrics
+      port: {{ $m.felixPort }}
+      targetPort: {{ $m.felixPort }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: calico-kube-controllers-metrics-scrape
+  namespace: {{ $m.calicoNamespace }}
+  labels:
+    app.kubernetes.io/name: calico-kube-controllers-metrics
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  clusterIP: None
+  selector:
+    k8s-app: calico-kube-controllers
+  ports:
+    - name: http-metrics
+      port: {{ $m.kubeControllersPort }}
+      targetPort: {{ $m.kubeControllersPort }}
+{{- range $name := list "calico-felix-metrics" "calico-kube-controllers-metrics" }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ $name }}
+  namespace: {{ $m.monitoringNamespace }}
+  labels:
+    release: {{ $m.prometheusRelease }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  namespaceSelector:
+    matchNames:
+      - {{ $m.calicoNamespace }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ $name }}
+  endpoints:
+    - port: http-metrics
+      interval: {{ $m.interval }}
+      relabelings:
+        # 노드별로 보이도록 Pod가 뜬 노드 이름을 node 라벨로
+        - sourceLabels: [__meta_kubernetes_pod_node_name]
+          targetLabel: node
+{{- end }}
+{{- end }}

@@ -42,6 +42,8 @@ git -C <GitLab kim-minji-infra·helm 클론> rev-parse HEAD   # 반영 전 main 
 
 **5. 노드 준비** (4.5) — k3s 내장 traefik·servicelb 끄기, Longhorn 선행 패키지, 디스크 노드 라벨, ai2 taint(4.2)
 
+**5-1. Calico 업그레이드·operator 전환** (4.16) — **9단계 부트스트랩 전에 끝낸다.** 지금의 v3.27.3 매니페스트 설치에서는 operator 전환이 지원되지 않으므로(같은 버전 매니페스트에서만 전환 가능), 부트스트랩 때 `calico` Application이 operator를 먼저 띄우면 안 된다. 3.27.3 → 3.29 → 3.31.7 매니페스트 업그레이드 후 차트를 helm으로 설치해 전환하고, 9단계에서 `calico` Application이 넘겨받는다. UTM 스냅샷 필수
+
 **6. 코드를 GitLab main에 반영**
 - 먼저 GitLab `kim-minji-helm` main에 GitHub에 없는 커밋(이전 CI 태그 커밋 등)이 있는지 확인하고, 있으면 GitHub develop에 먼저 합친다 (force-push 금지)
 - GitHub 각 레포 `develop` → `main` 머지 후 GitLab `main`에 push. **순서: infra → helm → ai·backend·frontend** (앱 레포 CI가 만드는 태그 MR이 새 helm main을 기준으로 열리도록)
@@ -87,12 +89,12 @@ git -C <GitLab kim-minji-infra·helm 클론> rev-parse HEAD   # 반영 전 main 
 
 | # | 시점 | 항목 | 현재 값 (placeholder) | 위치 | 확인 방법 |
 |---|---|---|---|---|---|
-| C1 | 배포 전 | k3s(Kubernetes) 버전 | `1.31.0` | `scripts/validate.sh` `K8S_VERSION` (helm, infra) | `kubectl version` (k3s 설치 시 버전 형식은 `v1.31.x+k3s1`). **Traefik 차트 42.x는 1.30 이상 필요**, Longhorn 1.12는 1.25 이상 |
+| C1 | 배포 전 | k3s(Kubernetes) 버전 | `1.34.0` (위키 Release-Notes의 클러스터 v1.34.5+k3s1, #242에서 갱신) | `scripts/validate.sh` `K8S_VERSION` (helm, infra) | `kubectl version` (k3s 설치 시 버전 형식은 `v1.31.x+k3s1`). **Traefik 차트 42.x는 1.30 이상 필요**, Longhorn 1.12는 1.25 이상 |
 | C2 | 배포 후 | ai-serving 메모리로 모델 로딩 가능 여부 | dev limits 1Gi(1~2개) / full limits 1.5Gi(1~3개) | `kim-minji-helm/ai-serving/values-dev.yaml`, `values-full.yaml` | dev 배포 후 OOMKilled·readiness 실패 여부, `kubectl top pod -n ai-serving`. 부족하면 limit을 올리고 8장 표 갱신 |
 | C3 | 배포 전 | GitLab 이전 후 호스트 IP | repoURL은 `http://gitlab.local:8929/...` 유지, IP만 변경 | CoreDNS custom 설정(`kube-system/coredns-custom`, `gitlab.local` hosts, 현재 `192.168.0.157`), **모든 노드**의 `/etc/hosts`·`/etc/rancher/k3s/registries.yaml` — 레포 밖 (0.5장 3단계) | 이전한 GitLab의 IP. 맥 호스트 컨테이너면 UTM 브리지에서 보이는 맥 IP |
 | C4 | 배포 전 | 기존 Sealed Secrets controller 설치 방식·이름·네임스페이스 | `kube-system/sealed-secrets-controller` (가정) | `sealed-secrets/values.yaml` `fullnameOverride`, 릴리스 네임스페이스(`argocd/apps/platform.yaml`) | `kubectl get deploy -A \| grep sealed`, `helm list -A`. 다르면 값을 맞춘다 (키 Secret이 같은 네임스페이스에 있어야 재사용됨). 기존 Deployment selector가 `app.kubernetes.io/name: sealed-secrets, app.kubernetes.io/instance: sealed-secrets`가 아니면(예: controller.yaml로 설치 → `name: sealed-secrets-controller`) selector 불변 오류가 나므로 4.1 전에 `kubectl -n kube-system delete deploy sealed-secrets-controller` (키 Secret은 남는다). 기존 Helm 릴리스가 있으면 리소스를 지우지 않도록 릴리스 메타데이터 Secret(`sh.helm.release.v1.<릴리스>.*`)만 삭제하고 `helm uninstall`은 하지 않는다 |
-| C5 | 배포 전 | 기존 ArgoCD Application 이름 (**ai-serving 주의**: backend values의 `AI_SERVER_URL`이 `kim-minji-ai-serving-ai-serving...`이라 현재 릴리스명이 `kim-minji-ai-serving`일 가능성이 높다. ApplicationSet은 `ai-serving` 릴리스로 Service `ai-serving-ai-serving`을 만들므로, 이름이 다르면 `AI_SERVER_URL`을 맞추거나 `releaseName`을 지정해야 backend→AI 호출이 된다. `kubectl -n ai-serving get svc`로 확인) | ApplicationSet이 차트명으로 생성 — apps: `mysql`, `minio`, `backend`, `ai-serving`, `frontend` / platform: `sealed-secrets`, `metallb`, `cert-manager`, `longhorn`, `traefik`, `keda`, `argo-rollouts`, `istio`(실험 때만 리소스 있음), `coredns`, `node-local-dns`, `network-policy`, `ingress`, `monitoring`, `loki`, `tempo`, `otel-collector`, `backup`, `argocd-notifications` | `argocd/apps/*.yaml` | `kubectl -n gitops get applications`. 이름이 다르면 4.1 절차에서 non-cascade 삭제. **앱 차트는 이름이 곧 Helm 릴리스명**이라, 다르면 리소스 이름·StatefulSet PVC가 새로 생겨 빈 DB/버킷으로 뜬다 → 해당 원소에 기존 릴리스명을 `releaseName`으로 지정하거나 2장 백업으로 데이터 이전 |
-| C6 | 배포 전 | ArgoCD 버전 | `templatePatch`(v2.10+), `ignoreMissingValueFiles` 사용 | `argocd/apps/platform.yaml` | `argocd version` 또는 argocd-server 이미지 태그 |
+| C5 | 배포 전 | 기존 ArgoCD Application 이름 (**ai-serving 주의**: backend values의 `AI_SERVER_URL`이 `kim-minji-ai-serving-ai-serving...`이라 현재 릴리스명이 `kim-minji-ai-serving`일 가능성이 높다. ApplicationSet은 `ai-serving` 릴리스로 Service `ai-serving-ai-serving`을 만들므로, 이름이 다르면 `AI_SERVER_URL`을 맞추거나 `releaseName`을 지정해야 backend→AI 호출이 된다. `kubectl -n ai-serving get svc`로 확인) | ApplicationSet이 차트명으로 생성 — apps: `mysql`, `minio`, `backend`, `ai-serving`, `frontend` / platform: `calico`, `sealed-secrets`, `metallb`, `cert-manager`, `longhorn`, `traefik`, `keda`, `argo-rollouts`, `istio`(실험 때만 리소스 있음), `coredns`, `node-local-dns`, `network-policy`, `ingress`, `monitoring`, `loki`, `tempo`, `otel-collector`, `backup`, `argocd-notifications` | `argocd/apps/*.yaml` | `kubectl -n gitops get applications`. 이름이 다르면 4.1 절차에서 non-cascade 삭제. **앱 차트는 이름이 곧 Helm 릴리스명**이라, 다르면 리소스 이름·StatefulSet PVC가 새로 생겨 빈 DB/버킷으로 뜬다 → 해당 원소에 기존 릴리스명을 `releaseName`으로 지정하거나 2장 백업으로 데이터 이전 |
+| C6 | 배포 전 | ArgoCD 버전 | `templatePatch`(v2.10+), `ignoreMissingValueFiles` 사용 | `argocd/apps/platform.yaml` | `argocd version` 또는 argocd-server 이미지 태그. **PreDelete hook을 지원하는 버전이면** `calico` 차트의 `helm.sh/hook: pre-delete` Job(operator `-pre-delete`, Calico 전체 삭제)이 Application 삭제 때 실행된다 → `calico` Application은 지우지 않는다 (4.16 6단계) |
 | C7 | 배포 전 | VM 메모리 배분 | 8장 가정: cp1 8GB / w1 7GB / ai2 7GB | UTM 설정 | 8장 표와 `kubectl describe node` Allocatable |
 | C8 | 배포 후 | 레포 밖 구성요소 실제 사용량 | 8장 추정치 | — | `kubectl top pod -A` (ArgoCD, k3s 내장 coredns·metrics-server·local-path, Longhorn instance-manager·CSI) |
 | C9 | 배포 전 | **(4.1 전 필수)** MetalLB IP 대역 / Traefik LB IP | `PLACEHOLDER-IP-RANGE` | `metallb/values.yaml` `ipAddressPool.addresses` | 노드 IP(.57/.157/.240)·공유기 DHCP 범위와 겹치지 않는 대역(예: `192.168.0.200-192.168.0.209`). 할당된 Traefik IP는 `kubectl -n traefik get svc traefik`. UTM 브리지가 맥 Wi-Fi면 L2 광고(ARP)가 맥 외부로 안 나갈 수 있다 → 맥에서 `curl http://<LB IP>`로 확인, 안 되면 NodePort 32088 경로를 계속 쓴다 |
@@ -110,7 +112,8 @@ git -C <GitLab kim-minji-infra·helm 클론> rev-parse HEAD   # 반영 전 main 
 | C21 | 배포 후 | ai-serving Pod당 처리량 | KEDA 기준 Pod당 `/predict` 2 rps | `kim-minji-helm/ai-serving/values.yaml` `keda.requestsPerSecondPerPod` | 부하 테스트(예: `hey -z 2m -c 4 -m POST -T application/json -d '{"bucket_name":"wafer-images","object_key":"<키>"}' https://ai.wafer.local/predict`)로 p95가 1초를 넘기 시작하는 rps를 찾고 그 70~80%로 정한다 |
 | C22 | 배포 후 | backend 메모리 (full, OTel Java agent 포함) | limits 1Gi, `JAVA_OPTS=-XX:MaxRAMPercentage=75` | `kim-minji-helm/backend/values.yaml` `resources` | agent가 힙 밖 메모리를 50~100Mi 더 쓴다. full 배포 후 OOMKilled·GC 시간 확인, 부족하면 limit 상향 |
 | C23 | 배포 전 | cp1·w1 디스크 여유 (Longhorn) | full 복제 2 기준 볼륨 합계 70Gi → 노드당 35Gi + 여유 | Longhorn 노드 디스크 (`/var/lib/longhorn`) | `df -h /var/lib/longhorn`, Longhorn UI의 노드 Schedulable 용량. 부족하면 VM 디스크 확장 또는 PVC 크기(mysql·minio 10Gi) 축소 |
-| C24 | 배포 전 | 현재 CNI 구성 (Calico) | 설치 가이드: k3s 기본 설치 후 Calico v3.26.1 매니페스트 적용 | 레포 밖 (B안 재설치 시) | `kubectl get pods -n kube-system -l k8s-app=calico-node`, `cat /etc/rancher/k3s/config.yaml`(`flannel-backend: none` 여부). NetworkPolicy(항목 3)는 Calico가 집행한다. B안이면 같은 구성으로 재현해야 한다 |
+| C24 | 배포 전 (4.16 0단계) | 현재 Calico 구성이 `calico/values.yaml`과 같은지 | 위키 기준 v3.27.3 매니페스트(kube-system), 풀 `default-ipv4-ippool` 10.42.0.0/16·VXLAN Always·IPIP Never·natOutgoing·blockSize 26, Felix `iptablesBackend` 미설정(Auto). 설치 가이드 문서에는 v3.26.1로 남아 있다 | `calico/values.yaml` `tigera-operator.installation.calicoNetwork`, `defaultFelixConfiguration`, `nodeCIDRs` | `kubectl -n kube-system get ds calico-node -o jsonpath='{.spec.template.spec.containers[0].image}'`(버전), `kubectl get ippools.crd.projectcalico.org -o yaml`(이름·cidr·vxlanMode·ipipMode·natOutgoing·blockSize), **`kubectl -n kube-system get cm calico-config -o jsonpath='{.data.calico_backend}'` → `bird`면 values `bgp: Enabled`(현재 값), `vxlan`이면 `Disabled`**, 같은 ConfigMap의 `veth_mtu`·`cni_network_config`(`container_settings.allow_ip_forwarding`이 true면 values에 `calicoNetwork.containerIPForwarding: Enabled`), calico-node env의 `IP_AUTODETECTION_METHOD`·`FELIX_*`(기본값과 다르면 values의 `calicoNetwork.nodeAddressAutodetectionV4` 등으로 옮긴다), `cat /etc/rancher/k3s/config.yaml`(`flannel-backend: none`, `cluster-cidr`가 풀과 같은지). **값이 다르면 operator가 전환을 멈추고 tigerastatus가 Degraded**가 된다 |
+| C28 | 배포 후 (4.16) | dev(cp1 1대)에서 Typha Pending 여부 | operator가 노드 수로 Typha 개수를 자동 결정 (hostNetwork 5473 포트라 노드당 1개). **NotReady 노드도 세고 cordon(Unschedulable)된 노드만 뺀다** → 3노드 클러스터는 2개 이상 | operator 관리 — 개수는 values로 못 정한다 | 4.3대로 끌 노드를 **drain(=cordon)한 뒤** 전원을 끄면 Typha가 1개로 줄어 Pending이 없다. drain 없이 껐다면 `kubectl cordon k3s-w1 k3s-ai2`. 확인: `kubectl -n calico-system get pod -l k8s-app=calico-typha` |
 | C25 | 실험 전 (4.15) | **부하 RATE와 AI Pod 1개 처리량**, 연결 풀·timeout | k6 `RATE=20`, `maxConnections: 100`(RATE × timeout, 5-3), `http1MaxPendingRequests: 32`, `timeout: 5s` | k6 `-e RATE`, `kim-minji-helm/ai-serving/values.yaml` `mesh.connectionPool`·`mesh.timeout` | C·D에서는 장애 Pod가 격리된 동안 **정상 Pod 1개가 전부 받는다**(격리 시간이 30→60→90초로 늘어 5분 중 대부분). 그래서 Pod 2개가 아니라 **1개 기준**으로 확인한다: 실험 `mesh` 구성에서 장애 Pod를 켠 채(정상 Pod 1개) RATE를 5부터 올려 `istio_requests_total`의 `response_flags="UO"`(연결 풀 초과)·`UT`(timeout)가 0이고 p95가 3초 아래인 최대 RATE를 찾는다. 본 측정 RATE는 그 70% 이하로 정하고 모든 시나리오에 같은 값을 쓴다 (20 RPS가 넘치면 20을 고집하지 않는다). 단일 워커 FastAPI라 KEDA 기준값(Pod당 2 rps, C21)보다 크게 높지 않을 수 있다 |
 | C26 | 실험 전 (4.15) | ai2 메모리로 AI Pod 2개 + 카나리 1개 | dev limits 1Gi × 3 = 3Gi (+ sidecar 256Mi × 3) | UTM ai2 메모리, `kim-minji-helm/ai-serving/values-dev.yaml` | 실험 라벨을 바꿀 때마다 카나리 Pod가 잠시 1개 더 뜬다. `kubectl top pod -n ai-serving`, OOMKilled 여부. 맥 여유 메모리(약 17GB)로 cp1 8GB + ai2 8GB를 동시에 켤 수 있는지 먼저 확인 |
 | C27 | 실험 전 (4.15) | Istio 1.30과 k3s 버전 호환 | Istio `1.30.7` (base, istiod) | `istio/Chart.yaml` | istio.io의 Supported Releases 표에서 1.30이 지원하는 Kubernetes 버전에 C1 버전이 들어가는지 확인. 아니면 맞는 Istio 버전으로 바꾸고 `helm dependency update istio` |
@@ -161,6 +164,7 @@ A안 절차는 0.5장.
    kubectl -n kube-system get cm coredns-custom -o yaml > coredns-custom.yaml          # gitlab.local hosts (C3). 없으면 오류가 나니 확인
    for ns in application ai-serving storage; do kubectl -n $ns get secret gitlab-registry-secret -o yaml > gitlab-registry-secret-$ns.yaml; done
    kubectl get ippools.crd.projectcalico.org -o yaml > calico-ippools.yaml           # Pod CIDR·캡슐화 방식 (C24)
+   kubectl get felixconfigurations.crd.projectcalico.org -o yaml > calico-felixconfig.yaml
    # 각 노드에서: /etc/rancher/k3s/config.yaml, /etc/rancher/k3s/registries.yaml, /etc/hosts의 gitlab.local 줄을 맥으로 복사
    ```
    (k3s 제거 스크립트는 `/etc/rancher/k3s`를 지운다)
@@ -174,12 +178,15 @@ A안 절차는 0.5장.
    # w1, ai2
    curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION=<v1.xx.y+k3s1> K3S_URL=https://192.168.0.57:6443 K3S_TOKEN=<token> sh -
    ```
-   Calico는 기존과 같은 IP 풀로 맞춘다. 기본 매니페스트의 풀(`192.168.0.0/16`, IPIP)은 노드 LAN(192.168.0.x)과 겹치므로 그대로 쓰지 않는다:
+   Calico는 레포의 `calico` 차트(tigera-operator)를 **helm으로 먼저 설치**한다. ArgoCD는 CNI가 있어야 뜨므로 Calico를 Application으로 처음 설치할 수 없다. 8단계 부트스트랩에서 `calico` Application이 같은 리소스를 넘겨받는다. IP 풀은 `calico/values.yaml`(10.42.0.0/16, VXLAN)이며 `calico-ippools.yaml`과 같은지 먼저 비교한다. 노드 대역과 겹치면 `scripts/validate.sh`가 실패한다:
    ```bash
-   curl -sLO https://raw.githubusercontent.com/projectcalico/calico/<버전>/manifests/calico.yaml
-   # calico-node 환경변수: CALICO_IPV4POOL_CIDR=10.42.0.0/16, CALICO_IPV4POOL_VXLAN=Always, CALICO_IPV4POOL_IPIP=Never (calico-ippools.yaml과 비교)
-   kubectl apply -f calico.yaml
+   cd <kim-minji-infra 클론>                     # GitLab main과 같은 커밋
+   helm dependency build calico                  # charts/*.tgz는 gitignore라 클론에 없다
+   # calico-system 네임스페이스·ServiceMonitor CRD가 아직 없으므로 메트릭 리소스는 끄고 설치 (ArgoCD가 나중에 만든다)
+   helm upgrade --install calico ./calico -n tigera-operator --create-namespace -f calico/values.yaml --set metrics.enabled=false
+   kubectl get tigerastatus                      # calico Available=True, 노드 Ready
    ```
+   8단계 뒤 `calico` Application이 Synced이면 helm 릴리스 기록만 지운다(4.16 6단계와 같다). `helm uninstall`은 쓰지 않는다
 3. **노드 준비** (4.5의 패키지·Longhorn 디스크 라벨, 4.2 taint). k3s 비활성화 설정은 2단계 플래그로 반영됨
 4. **Sealed Secrets 키 복원** — 컨트롤러가 뜨기 **전에** 넣어야 기존 SealedSecret 암호문을 그대로 쓴다. 내보낸 YAML에서 `metadata.resourceVersion`, `uid`, `creationTimestamp`, `managedFields`를 지운 뒤 적용
    ```bash
@@ -222,6 +229,7 @@ A안 절차는 0.5장.
 
 | 순서 | 앱 | 준비 확인 | 앞 단계가 안 됐을 때 증상 |
 |---|---|---|---|
+| 0 | calico | `kubectl get tigerastatus` calico Available (4.16에서 이미 설치됨, Application은 넘겨받기만 한다) | 전체 Pod 네트워크 |
 | 1 | sealed-secrets | `kubectl -n kube-system get deploy sealed-secrets-controller` | 다른 앱의 SealedSecret이 Secret으로 안 풀림 → Pod `CreateContainerConfigError` |
 | 2 | metallb, cert-manager, longhorn | 각 네임스페이스 Pod Ready, `kubectl get clusterissuer wafer-ca` | IPAddressPool·ClusterIssuer·RecurringJob이 webhook/CRD 없음으로 실패 → retry |
 | 3 | traefik | `kubectl -n traefik get svc traefik` EXTERNAL-IP | Ingress가 Progressing |
@@ -271,6 +279,7 @@ kubectl -n gitops label secret in-cluster env=dev --overwrite
 # sync 완료 후, 끌 노드를 drain한 다음 전원을 끈다
 kubectl drain k3s-w1 --ignore-daemonsets --delete-emptydir-data
 kubectl drain k3s-ai2 --ignore-daemonsets --delete-emptydir-data
+# (#242) drain으로 cordon된 노드는 Calico Typha 개수에서 빠진다 → cp1 1대에서 Typha Pending 없음 (C28)
 # 다시 켠 뒤
 kubectl uncordon k3s-w1 k3s-ai2
 ```
@@ -722,6 +731,113 @@ kubectl argo rollouts promote ai-serving-ai-serving -n ai-serving --full
 - 앱 Pod는 sidecar 라벨이 빠진 템플릿으로 다시 뜬다(sidecar 없음). `kubectl get crd | grep istio.io`가 비어 있고 backend·ai-serving Pod가 1/1이면 끝
 - **실험 중 보안 주의**: 장애 주입 API(`/admin/fault`)는 `ai.wafer.local` Ingress로도 닿는다(Service를 거치므로 Pod를 고를 수는 없다). 실험이 끝나면 라벨을 꼭 지운다
 
+### 4.16 Calico 업그레이드·operator 전환 (#242)
+
+목표: v3.27.3 매니페스트 설치(kube-system) → tigera-operator v3.31.7(calico-system), 이후 ArgoCD `calico` Application이 관리. 0.5장 5-1단계에서 한다.
+
+- 3.27은 k3s v1.34를 테스트하지 않은 버전이다. 3.31은 Kubernetes 1.32~1.35를 테스트한다
+- Calico 업그레이드는 직전 두 마이너 버전에서만 지원되고, operator 전환은 **같은 버전의 매니페스트 설치**에서만 지원된다 → 3.27.3 → 3.29.x → 3.31.7 → operator
+- 각 단계에서 calico-node가 노드별로 재시작해 그 노드의 Pod 네트워크가 잠깐 끊길 수 있다. 외부 접속이 중요하지 않은 시간에 한다
+- **전제: VM 3대 모두 켜고 모든 노드 Ready.** 매니페스트 rollout과 operator 전환 모두 노드마다 calico-node를 기다리므로, 꺼진 노드가 있으면 멈추거나 Degraded로 끝난다
+
+**0. 사전 확인·백업**
+```bash
+# UTM에서 VM 3대 스냅샷: 3대를 모두 종료한 상태에서 찍는다 (k3s 데이터스토어 일관성). operator 전환 뒤에는 매니페스트로 되돌리는 공식 경로가 없다 → 스냅샷이 롤백 수단
+mkdir -p ~/wafer-backup/calico && cd ~/wafer-backup/calico
+kubectl -n kube-system get ds calico-node -o jsonpath='{.spec.template.spec.containers[0].image}'; echo   # v3.27.3 (C24)
+kubectl get ippools.crd.projectcalico.org -o yaml > ippools.yaml
+kubectl get felixconfigurations.crd.projectcalico.org -o yaml > felixconfig.yaml
+kubectl -n kube-system get ds calico-node -o yaml > calico-node-ds.yaml
+kubectl -n kube-system get cm calico-config -o yaml > calico-config.yaml
+kubectl -n kube-system get cm calico-config -o jsonpath='{.data.calico_backend}'; echo   # bird → values bgp: Enabled, vxlan → Disabled (C24)
+# 각 노드: 모두 "(legacy)"이고, 규칙(KUBE-·cali- 체인)도 legacy 쪽에 있어야 한다 (장애 #191). nft 쪽 체인 수는 0이어야 한다
+for n in 192.168.0.57 192.168.0.157 192.168.0.240; do
+  ssh ubuntu@$n 'hostname; sudo iptables --version; echo -n "legacy: "; sudo iptables-legacy-save | grep -cE "^:(KUBE|cali)"; echo -n "nft: "; sudo iptables-nft-save 2>/dev/null | grep -cE "^:(KUBE|cali)"'
+done
+# 설치 당시 기본 매니페스트와 지금 클러스터의 차이 (env뿐 아니라 ConfigMap·probe도). 1·2단계 매니페스트에 전부 옮긴다
+curl -sLo calico-3.27.3-stock.yaml https://raw.githubusercontent.com/projectcalico/calico/v3.27.3/manifests/calico.yaml
+kubectl diff -f calico-3.27.3-stock.yaml > stock-vs-live.diff; less stock-vs-live.diff   # diff는 클러스터를 바꾸지 않는다
+```
+- `ippools.yaml`·`calico-node-ds.yaml`의 값을 `calico/values.yaml`과 비교한다 (C24). 다르면 values를 클러스터 값에 맞춰 커밋하고 다시 시작한다
+- `stock-vs-live.diff`에서 기본 매니페스트와 다른 부분을 적어 둔다: calico-node env(`CALICO_IPV4POOL_*`, `IP_AUTODETECTION_METHOD`, `FELIX_*`), `calico-config` ConfigMap(`calico_backend`, `veth_mtu`, `cni_network_config`), probe(`-bird-ready`/`-bird-live`를 지웠는지). `--force-conflicts`로 적용하면 옮기지 않은 값은 **경고 없이 기본값으로 돌아간다**
+- `felixconfig.yaml`에 `iptablesBackend`가 없으면 Auto다. 노드가 전부 legacy면 Legacy로 고정해도 규칙이 바뀌지 않는다
+
+**1. 매니페스트 v3.29.x** (3.29의 최신 패치)
+```bash
+curl -sLo calico-3.29.yaml https://raw.githubusercontent.com/projectcalico/calico/v3.29.<x>/manifests/calico.yaml
+# 0단계 stock-vs-live.diff의 차이를 전부 반영: calico-node env(CALICO_IPV4POOL_CIDR=10.42.0.0/16, CALICO_IPV4POOL_VXLAN=Always, CALICO_IPV4POOL_IPIP=Never 등), calico-config, probe
+kubectl apply --server-side --force-conflicts -f calico-3.29.yaml
+kubectl -n kube-system rollout status ds/calico-node --timeout=10m
+kubectl -n kube-system rollout status deploy/calico-kube-controllers
+```
+→ 아래 **검증**을 통과한 뒤 다음 단계
+
+**2. 매니페스트 v3.31.7** — 1단계와 같은 방식으로 `v3.31.7/manifests/calico.yaml` → 검증
+
+**검증** (1·2·5단계마다)
+```bash
+kubectl get nodes                                             # 모두 Ready
+kubectl get pods -A -o wide | grep -E 'calico|typha'          # Running
+# 노드 간 Pod 통신: ai2에 있는 Pod IP로 w1에서 ping (VXLAN 경로)
+kubectl -n ai-serving get pod -o wide
+kubectl run net-test --rm -it --image=busybox --restart=Never --overrides='{"spec":{"nodeName":"k3s-w1"}}' -- ping -c3 <ai2 Pod IP>
+# DNS, NetworkPolicy가 그대로 집행되는지
+kubectl run dns --rm -it --image=busybox --restart=Never -- nslookup kubernetes.default
+kubectl -n application run np-test --rm -it --image=busybox --restart=Never -- wget -T3 -O- http://minio-minio.storage:9000/minio/health/live   # timeout이어야 정상
+```
+
+**3. operator 차트 렌더 확인** (맥, GitLab main과 같은 커밋의 클론)
+```bash
+scripts/validate.sh dev        # calico CIDR 검사 포함
+```
+
+**4. operator 전환** (helm으로 직접. ArgoCD 부트스트랩 전)
+```bash
+helm dependency build calico
+# FelixConfiguration default는 매니페스트 설치가 이미 만들어 helm이 넘겨받지 못한다 → helm에서는 끄고 값만 patch (ArgoCD가 SSA로 이어받는다)
+kubectl patch felixconfiguration default --type merge -p '{"spec":{"iptablesBackend":"Legacy"}}'
+# calico-system 네임스페이스가 아직 없으므로 메트릭 리소스도 끄고 설치 (0.5장 9단계 부트스트랩 때 ArgoCD가 만든다)
+helm upgrade --install calico ./calico -n tigera-operator --create-namespace -f calico/values.yaml \
+  --set metrics.enabled=false --set tigera-operator.defaultFelixConfiguration.enabled=false
+kubectl get tigerastatus -w                  # calico Available=True까지 (노드 수에 따라 수 분)
+kubectl describe tigerastatus calico         # Degraded면 메시지를 보고 values를 클러스터 값에 맞춘 뒤 helm upgrade 다시
+```
+- operator가 kube-system의 calico-node·kube-controllers를 calico-system으로 노드별로 옮기고 kube-system 쪽을 지운다. **진행 중에 kube-system의 Calico 리소스를 고치거나 지우지 않는다**
+- 이미 있는 `crd.projectcalico.org` CRD(2단계에서 3.31.7)는 helm이 건너뛰고, `operator.tigera.io` CRD만 새로 만든다. 이후 CRD는 ArgoCD가 관리한다(`manageCRDs: false`)
+- **`helm uninstall calico`는 하지 않는다**: 차트의 pre-delete hook이 Calico를 지운다
+
+**5. 전환 확인**
+```bash
+kubectl -n calico-system get pods -o wide            # calico-node 노드당 1, calico-typha, calico-kube-controllers Running
+kubectl -n kube-system get ds,deploy | grep calico   # 비어 있어야 한다
+kubectl get installation default -o jsonpath='{.status.calicoVersion}'; echo           # v3.31.7
+kubectl get felixconfiguration default -o jsonpath='{.spec.iptablesBackend}'; echo     # Legacy
+kubectl -n calico-system exec ds/calico-node -c calico-node -- cat /sys/class/net/vxlan.calico/mtu   # NIC MTU - 50 (보통 1450)
+```
+→ 위 **검증** 반복. dev(cp1 1대)로 쓸 때는 C28(Typha Pending) 확인
+
+**6. ArgoCD 인계** (0.5장 9단계 부트스트랩 이후)
+- `calico` Application이 Synced/Healthy이고 calico-system에 메트릭 Service 2개가 생겼는지 확인
+- `argocd app diff calico`가 비어 있는지 확인. Installation `ipPools`가 계속 다르면 operator가 채운 필드를 `calico/values.yaml`의 풀에 추가한다(리스트 전체가 비교된다)
+- helm 릴리스 기록만 지운다(리소스는 남는다. Application이 관리):
+  ```bash
+  kubectl -n tigera-operator delete secret -l owner=helm,name=calico
+  ```
+- **`calico` Application은 지우지 않는다.** ArgoCD가 차트의 pre-delete hook(operator `-pre-delete`)을 PreDelete hook으로 실행하면 Calico 전체가 지워진다 (C6). ApplicationSet에서 원소를 빼거나 이름을 바꾸는 것도 삭제다. 꼭 지워야 하면 `kubectl -n gitops patch application calico --type json -p '[{"op":"remove","path":"/metadata/finalizers"}]'`로 finalizer를 먼저 뺀다
+
+**7. 메트릭·알림 확인**
+- Prometheus Targets: `calico-felix-metrics`(노드 수만큼), `calico-kube-controllers-metrics` UP
+- kube-controllers가 DOWN이면 9094 포트가 열려 있는지 `kubectl -n calico-system get kubecontrollersconfiguration default -o yaml`(`prometheusMetricsPort`)과 operator가 만든 정책(`kubectl -n calico-system get networkpolicy`)을 본다
+- Prometheus Rules에 `calico` 그룹 4개, Grafana에 **Calico CNI** 대시보드
+
+**8. 롤백**
+- 1·2단계 도중·직후: 이전 버전 매니페스트(같은 차이 반영)를 `kubectl apply --server-side --force-conflicts -f`로 다시 적용. Calico는 다운그레이드를 공식 지원하지 않으므로 best effort이고, 안 되면 스냅샷
+- 4단계 이후: 매니페스트로 되돌리는 공식 경로가 없다 → 0단계 UTM 스냅샷으로 3대를 같은 시점으로 복원
+- 스냅샷 복원은 w1에서 도는 GitLab도 그 시점으로 되돌린다. 스냅샷 뒤 GitLab에 push한 커밋(0.5장 6단계 등)은 다시 push한다
+- ArgoCD 인계 후 Calico 설정만 되돌릴 때: `calico/values.yaml`을 Git revert → sync (operator가 반영)
+
+**9. (선택) BIRD 끄기** — 0단계 `calico_backend`가 `bird`였다면 전환 후에도 BIRD가 돈다(경로는 VXLAN). 끄려면 `calico/values.yaml`의 `bgp: Disabled`로 바꾸는 커밋을 따로 하고 sync → calico-node 롤링 재시작 → 위 **검증**
+
 ## 5. 채워야 할 시크릿
 
 모든 값은 `kubeseal`로 암호화해 해당 values 파일의 placeholder 자리에 커밋한다. 평문 커밋 금지.
@@ -815,6 +931,7 @@ printf '    slack-webhook-url: %s\n' "$(seal "$URL" gitops argocd-notifications-
 - [ ] Running/Completed가 아닌 Pod 없음 (Pending뿐 아니라 Terminating·Unknown 포함): `kubectl get pods -A | grep -vE 'Running|Completed'`. **예외(현재 알려진 것)**:
   - 없음 (4.8 스토리지 이전 후). 이전 전이라면 mysql·minio는 local-path PV가 있는 k3s-w1이 꺼져 있으면 Pending
 - [ ] coredns replica 1 Running
+- [ ] (#242) Calico: `kubectl get tigerastatus` calico Available, calico-system에 Pending 없음 (Typha는 C28), `calico` Application Synced
 - [ ] ai-serving이 cp1에 Running (ai2 선호지만 ai2가 꺼져 있으므로), OOMKilled 없음 (C2)
 - [ ] (항목 6) dev에서 w1·ai2를 꺼도 Slack에 노드 다운·TargetDown 알림이 오지 않음 (cp1 관련·서비스·백업 알림은 온다)
 - [ ] Prometheus retention 2d: `kubectl -n monitoring get prometheus -o jsonpath='{.items[0].spec.retention}'`
@@ -838,6 +955,7 @@ printf '    slack-webhook-url: %s\n' "$(seal "$URL" gitops argocd-notifications-
 ### 6.2 full, 3대 모두 켠 상태
 
 - [ ] `env=full` 라벨 적용 후 모든 Application Synced/Healthy
+- [ ] (#242) calico-node 3개(노드마다), Prometheus `calico-felix-metrics` 타깃 3개 UP, 노드 간 Pod 통신(4.16 검증)
 - [ ] coredns 2개가 서로 다른 노드: `kubectl -n kube-system get pod -l k8s-app=kube-dns -o wide`
 - [ ] frontend, backend 각 2개 Running
 - [ ] ai-serving이 k3s-ai2에만 배치: `kubectl -n ai-serving get pod -o wide`
@@ -892,6 +1010,7 @@ printf '    slack-webhook-url: %s\n' "$(seal "$URL" gitops argocd-notifications-
 - NetworkPolicy 롤백: `network-policy/values.yaml`의 `defaultDenyNamespaces: []`(또는 문제 네임스페이스만 제외)로 커밋 → 해당 네임스페이스의 default-deny·DNS 허용·egress 허용 정책이 함께 제거되고, 기존 ingress 허용 규칙만 남는다
 - HTTPS 리다이렉트 롤백: `traefik/values.yaml`의 `ports.web.http.redirections` 제거 커밋 (TLS 인증서는 그대로 두어도 무방)
 - k3s 설정 롤백: `/etc/rancher/k3s/config.yaml`의 `disable` 항목 제거 후 `systemctl restart k3s`
+- Calico 업그레이드·operator 전환 롤백: 4.16의 8단계 (operator 전환 후에는 UTM 스냅샷 복원)
 
 원칙:
 
@@ -1034,6 +1153,21 @@ full (`--nodes 3`):
 - 실험 라벨을 바꿀 때 카나리 Pod가 잠시 1개 더 뜬다 (+250m · 512Mi, mesh면 sidecar 포함 +300m · 576Mi). ai2 limits 합계는 AI Pod 3개 × 1Gi + sidecar 3 × 256Mi ≈ 3.75Gi (C26)
 - istio-init(initContainer)은 Pod 시작 때만 잠깐 돈다
 
+### 8.5 Calico operator 전환 (#242)
+
+렌더링 결과에는 tigera-operator Deployment만 있다. calico-node·Typha·kube-controllers는 operator가 만들므로 8.1의 "레포 밖·동적 생성" 쪽에 더한다. 매니페스트 설치의 calico-node(기본 requests 250m)는 그동안 8.1 표에 들어 있지 않았다.
+
+| 구성요소 | requests/Pod (CPU · 메모리) | dev (노드 1, Typha 1) | full (노드 3, Typha 1~2) |
+|---|---|---|---|
+| tigera-operator | 50m · 64Mi | 50m · 64Mi | 50m · 64Mi |
+| calico-node (DaemonSet) | 100m · 128Mi | 100m · 128Mi | 300m · 384Mi |
+| calico-typha (개수는 operator가 결정, C28) | 50m · 64Mi | 50m · 64Mi (w1·ai2 cordon 시 1개) | 100~150m · 128~192Mi (2~3개) |
+| calico-kube-controllers | 25m · 64Mi | 25m · 64Mi | 25m · 64Mi |
+| **합계** | | **225m · 320Mi** | **475~525m · 640~704Mi** |
+
+- 매니페스트 설치 대비 노드당 calico-node requests 250m → 100m. 대신 operator·Typha가 더해져 dev 합계는 비슷하다(250m → 225m)
+- calico-apiserver·Goldmane·Whisker·CSI 드라이버는 끄고 설치한다 (`calico/values.yaml`)
+
 ## 9. 정적 검증 결과 (클러스터 없이, 2026-10-27)
 
 GitHub `develop`(항목 0~9 머지 후)에서 `scripts/validate.sh`를 실행한 결과. 클러스터 접속 검증(`kubectl --dry-run=server` 등)은 범위 밖이라 하지 않았다.
@@ -1100,3 +1234,15 @@ GitHub `develop`(항목 0~9 머지 후)에서 `scripts/validate.sh`를 실행한
 - ai 장애 주입: 모델을 stub으로 바꾼 로컬 FastAPI에서 `FAULT_INJECTION_ENABLED=false`면 `/admin/fault` 404, `true`면 켠 뒤 `/predict` 503·`/health` 200, 끄면 `/predict` 200
 - k6 스크립트: 로컬 mock(요청 절반 503)에 20 RPS × 3초 → 60건, `http_req_failed` 50.00%
 - `loadtest/fault.sh`: KUBECONFIG 미지정 시 종료, EKS 컨텍스트(더미 kubeconfig)면 실행 거부
+
+### 9.2 Calico operator 전환 추가분 (#242, 2026-11-06)
+
+`K8S_VERSION`을 1.34.0으로 올린 뒤 `scripts/validate.sh` dev·full 전체 통과 (모든 차트를 k8s 1.34 스키마로 다시 검사).
+
+| 검사 | 결과 |
+|---|---|
+| `calico` 렌더링 (dev, full) | 15개 (유효 14, `FelixConfiguration`은 CRDs-catalog에 스키마가 없어 생략. 필드명 `iptablesBackend`는 차트의 CRD에서 확인). `crds/`의 CRD 정의는 helm template에 포함되지 않는다 |
+| Pod CIDR ↔ 노드·Service 대역 (`scripts/check-cidr.py`) | 10.42.0.0/16 / 노드 192.168.0.0/24 / Service 10.43.0.0/16 통과. 실패(exit 1) 확인: 풀 `192.168.0.0/16`(노드 겹침), `10.43.0.0/17`(Service 겹침), `10.42.0.1/16`(host bit), 주석이 섞인 overlay의 겹치는 `nodeCIDRs`, flow 스타일 `nodeCIDRs: []` |
+| 알림 규칙 | `promtool check rules` 4개 통과. `promtool test rules`: Ready 노드의 calico-node 미준비 → `CalicoNodeNotReady`(꺼진 노드는 알림 없음), iptables-restore 오류 2회 → `CalicoIptablesRestoreErrors`, IP 풀 91.6% → `CalicoIPPoolUsageHigh` |
+| ApplicationSet | `calico`(ns `tigera-operator`, SSA) 원소 추가, yamllint·kubeconform 통과 |
+| 별도 리뷰 반영 | helm이 기존 `FelixConfiguration default`를 넘겨받지 못함 → 전환 때는 끄고 patch, `calico_backend`(bird/vxlan)와 `bgp` 일치, 매니페스트 diff 범위(ConfigMap·probe), ipPools 기본값 명시(리스트 전체 비교), Typha와 cordon, PreDelete hook 경고, 3대 기동 전제 |

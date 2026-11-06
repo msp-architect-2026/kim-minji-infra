@@ -1,0 +1,123 @@
+# Calico CNI (tigera-operator). 기존 매니페스트 설치(kube-system)를 operator로 전환한다 → RUNBOOK 4.16
+# 값은 현재 클러스터 구성과 같아야 한다. 다르면 operator가 전환을 멈추고 tigerastatus에 Degraded를 남긴다 (RUNBOOK C24)
+
+# Pod CIDR(ipPools)과 겹치면 안 되는 노드 대역. scripts/validate.sh가 겹침을 검사한다 (CIDR 겹침으로 클러스터 전면 재구축 이력)
+nodeCIDRs:
+  - 192.168.0.0/24
+
+tigera-operator:
+  installation:
+    enabled: true
+    kubernetesProvider: ""
+    # k3s는 --flannel-backend=none --disable-network-policy --cluster-cidr=10.42.0.0/16 으로 설치돼 있어야 한다 (RUNBOOK 3.1)
+    cni:
+      type: Calico
+      ipam:
+        type: Calico
+    calicoNetwork:
+      # Pod 간 경로는 VXLAN(아래 ipPools)이다. 이 값은 **현재 매니페스트의 calico_backend와 같아야** operator 전환이 된다 (C24):
+      #   bird(매니페스트 기본) → Enabled, vxlan → Disabled. 다르면 tigerastatus Degraded로 전환이 멈춘다
+      # 전환이 끝난 뒤 BIRD를 끄려면 Disabled로 바꾸는 커밋을 따로 한다 (RUNBOOK 4.16 9단계)
+      bgp: Enabled
+      linuxDataplane: Iptables
+      ipPools:
+        # 이름·값은 매니페스트 설치의 기본 풀과 같게 (kubectl get ippools -o yaml로 확인)
+        - name: default-ipv4-ippool
+          cidr: 10.42.0.0/16
+          blockSize: 26
+          encapsulation: VXLAN
+          natOutgoing: Enabled
+          nodeSelector: all()
+          # operator가 채우는 기본값을 명시한다. ipPools는 통째로 비교되는 리스트라, 빠지면 ArgoCD selfHeal과 operator가 번갈아 고친다
+          allowedUses:
+            - Workload
+            - Tunnel
+          assignmentMode: Automatic
+          disableBGPExport: false
+          disableNewAllocations: false
+      # MTU는 지정하지 않는다: Calico가 NIC MTU에서 VXLAN 오버헤드(50B)를 빼서 자동 설정 (RUNBOOK 9장에서 실제 값 확인)
+    # Felix Prometheus 메트릭. 이 값이 FelixConfiguration의 메트릭 설정보다 우선한다
+    nodeMetricsPort: 9091
+    # calico-apiserver를 쓰지 않으므로 HA 대상은 kube-controllers뿐. 3노드·dev 1대 기동에 맞춰 1
+    controlPlaneReplicas: 1
+    # CSI 드라이버(DaemonSet) 미사용
+    kubeletVolumePluginPath: "None"
+    # 프로파일 공통 requests. Typha 개수는 operator가 노드 수로 자동 결정한다 (dev 1대 기동 시 확인 → RUNBOOK 9장)
+    calicoNodeDaemonSet:
+      spec:
+        template:
+          spec:
+            containers:
+              - name: calico-node
+                resources:
+                  requests:
+                    cpu: 100m
+                    memory: 128Mi
+                  limits:
+                    memory: 512Mi
+    calicoKubeControllersDeployment:
+      spec:
+        template:
+          spec:
+            containers:
+              - name: calico-kube-controllers
+                resources:
+                  requests:
+                    cpu: 25m
+                    memory: 64Mi
+                  limits:
+                    memory: 256Mi
+    typhaDeployment:
+      spec:
+        template:
+          spec:
+            containers:
+              - name: calico-typha
+                resources:
+                  requests:
+                    cpu: 50m
+                    memory: 64Mi
+                  limits:
+                    memory: 256Mi
+
+  # projectcalico.org/v3 API 서버, 흐름 수집기(Goldmane)·UI(Whisker)는 쓰지 않는다 (리소스 절약)
+  apiServer:
+    enabled: false
+  goldmane:
+    enabled: false
+  whisker:
+    enabled: false
+
+  # FelixConfiguration default. 매니페스트 설치가 만든 같은 이름의 리소스가 이미 있으면 helm은 넘겨받지 못하므로
+  # 전환 때(RUNBOOK 4.16 4단계)는 --set으로 끄고 kubectl patch로 넣은 뒤, ArgoCD(SSA)가 이어받는다
+  defaultFelixConfiguration:
+    enabled: true
+    # 노드 iptables를 legacy로 고정한 운영 기준(장애 #191)에 맞춘다. 기본 Auto는 노드마다 감지해 모드가 섞일 수 있다.
+    # 실행 중에 바꾸면 다른 백엔드에 규칙이 남으므로, 노드가 전부 legacy인지 먼저 확인한다 (RUNBOOK 4.16)
+    iptablesBackend: Legacy
+
+  # CRD는 ArgoCD(차트 crds/)만 관리한다. operator도 관리하면 두 주체가 같은 CRD를 고쳐 SSA 충돌·OutOfSync가 난다
+  manageCRDs: false
+
+  # tigera-operator Pod
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      memory: 256Mi
+
+# 관측 리소스 (kube-prometheus-stack). ServiceMonitor·PrometheusRule·대시보드는 monitoring 네임스페이스에 둔다
+metrics:
+  enabled: true
+  # operator가 Calico를 띄우는 네임스페이스
+  calicoNamespace: calico-system
+  monitoringNamespace: monitoring
+  # Prometheus ruleSelector·serviceMonitorSelector가 보는 release 라벨 (monitoring 차트 릴리스명)
+  prometheusRelease: monitoring
+  felixPort: 9091
+  kubeControllersPort: 9094
+  interval: 30s
+  alerts:
+    # IP 풀 사용률 경고 기준
+    ipamUsageRatio: 0.8
