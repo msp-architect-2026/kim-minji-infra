@@ -70,6 +70,7 @@ kim-minji-infra/
 ├── tempo/            # Tempo trace 저장소 (full 전용)
 ├── otel-collector/   # OpenTelemetry Collector (full 전용)
 ├── backup/           # 백업 Helm 차트: MySQL·MinIO 백업(클러스터 내 + 외부 S3), 주간 복원 검증
+├── calico/           # Calico CNI (tigera-operator, Felix 메트릭·알림)
 ├── network-policy/   # Calico NetworkPolicy (네임스페이스 간 접근 제어)
 ├── coredns/          # CoreDNS replica 2 + 노드 분산 배치 (k3s 기본 Deployment에 SSA 패치)
 ├── node-local-dns/   # NodeLocal DNSCache DaemonSet
@@ -202,11 +203,17 @@ syncPolicy:
 
 ## ▍CNI: Calico
 
+`calico/` 차트(tigera-operator v3.31.7)로 GitOps 관리한다. 설정은 `calico/values.yaml`의 `Installation`·`FelixConfiguration`.
+
 ```
-Pod IP 대역:  10.42.0.0/16   (노드 IP 192.168.0.x와 완전 분리)
-vxlanMode:   Always          (노드 간 Pod 통신 VXLAN 터널 encapsulation)
-natOutgoing: true            (Pod → 외부 NAT)
+Pod IP 대역:  10.42.0.0/16   (노드 IP 192.168.0.x와 완전 분리, scripts/validate.sh가 겹침 검사)
+캡슐화:       VXLAN          (노드 간 Pod 통신 VXLAN 터널. BGP로 경로를 받지 않는다)
+natOutgoing:  Enabled        (Pod → 외부 NAT)
+iptables:     Legacy         (노드 iptables 모드와 맞춤)
+메트릭:       Felix 9091 · kube-controllers 9094 → Prometheus, Grafana "Calico CNI" 대시보드, PrometheusRule calico
 ```
+
+매니페스트 설치(v3.27.3)에서의 업그레이드·전환 절차는 `docs/RUNBOOK.md` 4.16.
 
 ---
 
