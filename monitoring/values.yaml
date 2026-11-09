@@ -865,6 +865,11 @@ alertRules:
   backendJob: backend-backend
   aiJob: ai-serving-ai-serving
   backupMaxAgeHours: 26
+  # MES 업무 알림 임계값 (templates/wafer-rules.yaml의 wafer.mes)
+  mes:
+    failuresPer15m: 10
+    autoHoldsPerHour: 3
+    pendingReviews: 50
 
 # SLO (templates/slo-rules.yaml, 대시보드 templates/slo-dashboard.yaml). objective = 좋은 이벤트 비율 목표
 #  - 가용성 99.5%: 5xx가 아닌 응답 비율
