@@ -29,6 +29,54 @@ spec:
           annotations:
             summary: "backend → AI 서빙 Circuit Breaker OPEN ({{`{{ $labels.name }}`}})"
             description: AI 서빙 호출이 차단되어 추론 요청이 503으로 응답 중
+    - name: wafer.mes
+      rules:
+        - alert: MESInspectionFailureRateHigh
+          expr: sum(increase(mes_inspection_failures_total{job="{{ .Values.alertRules.backendJob }}"}[15m])) > {{ .Values.alertRules.mes.failuresPer15m }}
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "검사 실패 증가 (15분간 {{`{{ $value | humanize }}`}}건)"
+            description: 화면의 Failures에서 단계·에러 코드별 원인을 확인
+        - alert: MESInspectionStuckRecovered
+          expr: sum(increase(mes_inspection_stuck_recovered_total{job="{{ .Values.alertRules.backendJob }}"}[15m])) > 0
+          labels:
+            severity: warning
+          annotations:
+            summary: 멈춘 검사를 자동 실패 처리함
+            description: backend 재시작이나 처리 중단 여부를 확인하고, Failures에서 INSPECTION_STUCK 건을 재시도
+        - alert: MESLotAutoHoldSurge
+          expr: sum(increase(mes_lot_holds_total{job="{{ .Values.alertRules.backendJob }}",source="AUTO"}[1h])) >= {{ .Values.alertRules.mes.autoHoldsPerHour }}
+          labels:
+            severity: critical
+          annotations:
+            summary: "Lot 자동 Hold 급증 (1시간 {{`{{ $value | humanize }}`}}건)"
+            description: 화면의 SPC에서 의심 설비와 관리도를 확인
+        - alert: MESSuspectEquipment
+          expr: max by (equipment) (mes_equipment_suspect{job="{{ .Values.alertRules.backendJob }}"}) == 1
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "의심 설비 감지: {{`{{ $labels.equipment }}`}}"
+            description: 같은 공정의 다른 설비보다 결함률이 유의하게 높음. 조사 우선순위 신호이며 원인 확정은 아님
+        - alert: MESControlChartOutOfControl
+          expr: max(mes_spc_out_of_control{job="{{ .Values.alertRules.backendJob }}"}) == 1
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: 결함률 관리도 이탈 (최근 2일)
+            description: 화면의 SPC에서 이탈 지점을 확인
+        - alert: MESReviewBacklog
+          expr: max(mes_reviews_pending{job="{{ .Values.alertRules.backendJob }}"}) > {{ .Values.alertRules.mes.pendingReviews }}
+          for: 30m
+          labels:
+            severity: warning
+          annotations:
+            summary: "리뷰 대기 적체 ({{`{{ $value | humanize }}`}}건)"
+            description: 화면의 Reviews에서 처리. 리뷰가 끝나야 Lot이 완료됨
     - name: wafer.ai-serving
       rules:
         - alert: AIServingDown
