@@ -77,7 +77,7 @@ kim-minji-infra/
 │   ├── bootstrap/    # root App of Apps, in-cluster 클러스터 Secret(env 라벨) — 최초 1회 수동 적용
 │   └── apps/         # ApplicationSet: platform(이 레포 차트), apps(kim-minji-helm 차트)
 ├── scripts/          # validate.sh(정적 검증), resource-summary.py(requests 합계)
-├── loadtest/         # k6 부하 스크립트, ai-serving 장애 주입 토글 (RUNBOOK 4.15)
+├── loadtest/         # k6 부하·DB 경로 측정(bench.py)·정합성 불변식, ai-serving 장애 주입 토글 (RUNBOOK 4.15)
 └── docs/RUNBOOK.md   # 클러스터 작업 절차
 ```
 

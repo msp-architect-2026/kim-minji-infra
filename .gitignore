@@ -1,1 +1,3 @@
 charts/
+loadtest/results/
+loadtest/__pycache__/
